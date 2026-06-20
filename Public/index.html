@@ -235,10 +235,11 @@
             if (index < 0 || index >= playlist.length) return;
             
             const item = playlist[index];
-            const id = parseYouTubeId(item.id);
             currentPlayingIndex = index;
-            loadMedia('youtube', id);
-            socket.emit('video-change', { platform: 'youtube', id });
+            const platform = item.platform || 'youtube';
+            const idOrUrl = item.id || item.url;
+            loadMedia(platform, idOrUrl, item.url);
+            socket.emit('video-change', { platform, id: item.id, url: item.url });
             renderPlaylist();
         }
 
@@ -257,8 +258,17 @@
                 
                 const title = document.createElement('span');
                 title.className = 'playlist-item-title';
-                title.textContent = item.title;
-                title.title = item.title; // Show full title on hover
+                // Prepend platform icon
+                const icon = (function(p){
+                    switch((p||'').toLowerCase()){
+                        case 'vimeo': return '🎬 ';
+                        case 'bandcamp': return '🎵 ';
+                        case 'uguu': return '🔗 ';
+                        default: return '▶️ ';
+                    }
+                })(item.platform);
+                title.textContent = icon + (item.title || item.id || 'Unknown');
+                title.title = (item.title || item.id || 'Unknown'); // Show full title on hover
                 title.onclick = () => replayFromHistory(index);
                 
                 const deleteBtn = document.createElement('button');
@@ -308,7 +318,15 @@
 
                 const title = document.createElement('span');
                 title.className = 'playlist-item-title';
-                title.textContent = item.title || (item.id || 'Unknown');
+                const icon = (function(p){
+                    switch((p||'').toLowerCase()){
+                        case 'vimeo': return '🎬 ';
+                        case 'bandcamp': return '🎵 ';
+                        case 'uguu': return '🔗 ';
+                        default: return '▶️ ';
+                    }
+                })(item.platform);
+                title.textContent = icon + (item.title || (item.id || 'Unknown'));
                 title.title = `${item.title || item.id} — requested by ${item.requestedBy || 'Anonymous'}`;
                 title.onclick = () => replayFromQueue(index);
 
@@ -342,7 +360,10 @@
         function replayFromQueue(index) {
             if (index < 0 || index >= queue.length) return;
             const item = queue[index];
-            socket.emit('video-change', { platform: item.platform || 'youtube', id: item.id });
+            const platform = item.platform || 'youtube';
+            const idOrUrl = item.id || item.url;
+            loadMedia(platform, idOrUrl, item.url);
+            socket.emit('video-change', { platform, id: item.id, url: item.url });
         }
 
         // --- 1. TEXT CHAT ROUTINES ---
@@ -577,25 +598,37 @@
         function loadBandcamp(url) {
             destroyCurrentPlayer();
             const container = document.getElementById('player');
-            // Try embedding the page in an iframe (may be blocked); otherwise show a clickable link
-            const iframe = document.createElement('iframe');
-            iframe.src = url;
-            iframe.width = '100%';
-            iframe.height = '100%';
-            iframe.frameBorder = '0';
-            iframe.allow = 'autoplay; encrypted-media';
-            container.appendChild(iframe);
-
-            // Provide fallback link if embedding is blocked
-            setTimeout(() => {
-                try {
-                    const doc = iframe.contentDocument || iframe.contentWindow.document;
-                    // If we can access content, leave iframe as-is
-                } catch (e) {
-                    // Embedding blocked — show fallback
-                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Bandcamp embedding may be blocked by the site.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
+            // First, try Bandcamp oEmbed to get an official embed snippet
+            const oembedUrl = `https://bandcamp.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+            fetch(oembedUrl).then(r => r.json()).then(data => {
+                if (data && data.html) {
+                    container.innerHTML = data.html;
+                } else {
+                    // Fallback to iframe/link
+                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Unable to embed content.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
                 }
-            }, 800);
+            }).catch(() => {
+                // If oEmbed fails (CORS or other), try iframe then fallback to link
+                try {
+                    const iframe = document.createElement('iframe');
+                    iframe.src = url;
+                    iframe.width = '100%';
+                    iframe.height = '100%';
+                    iframe.frameBorder = '0';
+                    iframe.allow = 'autoplay; encrypted-media';
+                    container.appendChild(iframe);
+
+                    setTimeout(() => {
+                        try {
+                            const doc = iframe.contentDocument || iframe.contentWindow.document;
+                        } catch (e) {
+                            container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Bandcamp embedding may be blocked by the site.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
+                        }
+                    }, 800);
+                } catch (e) {
+                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Cannot embed Bandcamp.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
+                }
+            });
         }
 
         function destroyCurrentPlayer() {
@@ -617,29 +650,47 @@
             const input = document.getElementById('yt-input').value;
             if (!input) return;
 
-            try {
-                const id = parseYouTubeId(input);
-                currentPlatform = 'youtube';
-                currentMediaId = id;
+            const parsed = parseInput(input);
+            currentPlatform = parsed.platform;
+            currentMediaId = parsed.id || parsed.url;
 
-                socket.emit('video-change', { platform: 'youtube', id });
-                loadMedia('youtube', id);
-                console.log(`[Hangout] Loading YouTube video: ${id}`);
-            } catch (err) {
-                console.error('[Hangout] Error loading video:', err);
-                alert('Error loading video. Check the console for details.');
+            socket.emit('video-change', { platform: parsed.platform, id: parsed.id || parsed.url, url: parsed.url });
+            loadMedia(parsed.platform, parsed.id || parsed.url, parsed.url);
+            console.log(`[Hangout] Loading ${parsed.platform}: ${parsed.id || parsed.url}`);
+        }
+
+        function loadMedia(platform, idOrUrl, url) {
+            switch ((platform||'').toLowerCase()) {
+                case 'vimeo':
+                    addToHistory('vimeo', idOrUrl, url);
+                    loadVimeoVideo(idOrUrl);
+                    break;
+                case 'uguu':
+                    addToHistory('uguu', idOrUrl, url);
+                    loadUguuMedia(idOrUrl);
+                    break;
+                case 'bandcamp':
+                    addToHistory('bandcamp', idOrUrl, url);
+                    loadBandcamp(url || idOrUrl);
+                    break;
+                default:
+                    const finalId = idOrUrl; // YouTube id/url
+                    addToHistory('youtube', finalId, url);
+                    loadYouTubeVideo(finalId);
+                    break;
             }
         }
 
-        function loadMedia(platform, id) {
-            const finalId = parseYouTubeId(id);
-            addToHistory('youtube', finalId);
-            loadYouTubeVideo(finalId);
-        }
-
         socket.on('video-change', (data) => {
-            const id = typeof data === 'string' ? parseYouTubeId(data) : parseYouTubeId(data.id || currentMediaId);
-            loadMedia('youtube', id);
+            if (!data) return;
+            if (typeof data === 'string') {
+                const parsed = parseInput(data);
+                loadMedia(parsed.platform, parsed.id || parsed.url, parsed.url);
+                return;
+            }
+            const platform = data.platform || 'youtube';
+            const id = data.id || data.url || currentMediaId;
+            loadMedia(platform, id, data.url);
         });
 
         // --- 3. WEB RTC VIDEO CHAT ---

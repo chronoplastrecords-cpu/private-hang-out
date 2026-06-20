@@ -6,8 +6,8 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Serve frontend files from the 'public' directory
-app.use(express.static('public'));
+// Serve frontend files from the 'Public' directory
+app.use(express.static('Public'));
 
 let currentVideo = 'dQw4w9WgXcQ'; // Default video
 

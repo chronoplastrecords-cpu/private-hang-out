@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Our Private Hangout</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; display: flex; margin: 0; height: 100vh; background: #121212; color: #e0e0e0; }
+        .main-content { flex: 2; padding: 20px; display: flex; flex-direction: column; align-items: center; border-right: 1px solid #2d2d2d; }
+        .sidebar { flex: 1; display: flex; flex-direction: column; padding: 20px; background: #1e1e1e; }
+        #chat-box { flex: 1; overflow-y: auto; margin-bottom: 10px; padding: 10px; background: #0b0b0b; border-radius: 5px; border: 1px solid #333; }
+        .chat-msg { margin-bottom: 8px; font-size: 0.95rem; line-height: 1.4; }
+        input, button { padding: 10px; margin-top: 5px; border-radius: 5px; border: 1px solid #444; background: #2a2a2a; color: white; }
+        input:focus { border-color: #4CAF50; outline: none; }
+        button { background: #4CAF50; color: white; cursor: pointer; font-weight: bold; border: none; }
+        button:hover { background: #45a049; }
+        .controls { display: flex; gap: 10px; width: 100%; margin-bottom: 20px; }
+        #yt-input { flex: 1; }
+        .voice-box { margin-bottom: 20px; padding: 15px; background: #2a2a2a; border-radius: 5px; border: 1px solid #444; }
+        #my-id { font-weight: bold; color: #4CAF50; background: #111; padding: 2px 6px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+
+    <div class="main-content">
+        <h2>Watch Together</h2>
+        <div class="controls">
+            <input type="text" id="yt-input" placeholder="Paste YouTube Video ID (e.g. dQw4w9WgXcQ)">
+            <button onclick="changeVideo()">Sync Video</button>
+        </div>
+        <div id="player"></div>
+    </div>
+
+    <div class="sidebar">
+        <div class="voice-box">
+            <h3>Voice Chat</h3>
+            <p>Your ID: <span id="my-id">Connecting...</span></p>
+            <input type="text" id="peer-id-input" placeholder="Friend's ID to call" style="width: calc(100% - 22px);">
+            <button onclick="callFriend()" style="width: 100%; margin-top: 10px;">Call Friend</button>
+        </div>
+
+        <h3>Text Chat</h3>
+        <div id="chat-box"></div>
+        <div style="display: flex; gap: 5px;">
+            <input type="text" id="chat-input" placeholder="Type a message..." style="flex: 1;" onkeypress="handleKeyPress(event)">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+
+        // --- 1. TEXT CHAT ROUTINES ---
+        function sendMessage() {
+            const input = document.getElementById('chat-input');
+            if(input.value.trim() !== '') {
+                socket.emit('chat-message', input.value);
+                input.value = '';
+            }
+        }
+        
+        function handleKeyPress(e) {
+            if(e.key === 'Enter') sendMessage();
+        }
+
+        socket.on('chat-message', (msg) => {
+            const chatBox = document.getElementById('chat-box');
+            chatBox.innerHTML += `<div class="chat-msg"><strong>></strong> ${msg}</div>`;
+            chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to bottom
+        });
+
+        // --- 2. YOUTUBE IFRAME SYNC ---
+        let player;
+        const tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        const firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('player', {
+                height: '360',
+                width: '100%',
+                videoId: 'dQw4w9WgXcQ', 
+            });
+        }
+
+        function changeVideo() {
+            const videoId = document.getElementById('yt-input').value;
+            // Extract ID if they paste a full link instead of just the ID
+            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+            const match = videoId.match(regExp);
+            const actualId = (match && match[2].length == 11) ? match[2] : videoId;
+
+            if(actualId) socket.emit('video-change', actualId);
+        }
+
+        socket.on('video-change', (videoId) => {
+            if (player && player.loadVideoById) {
+                player.loadVideoById(videoId);
+            }
+        });
+
+        // --- 3. WEB RTC VOICE CHAT ---
+        const peer = new Peer(); // Hooks directly into PeerJS free cloud servers
+        let myStream;
+
+        peer.on('open', (id) => {
+            document.getElementById('my-id').innerText = id;
+        });
+
+        // Request microphone access from browser
+        navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(stream => {
+            myStream = stream;
+        }).catch(err => {
+            alert("Microphone access is required for voice chat!");
+            console.error(err);
+        });
+
+        // Handle incoming calls from friends
+        peer.on('call', (call) => {
+            call.answer(myStream); 
+            call.on('stream', (remoteStream) => {
+                playAudio(remoteStream);
+            });
+        });
+
+        // Initiate a call to a friend using their ID
+        function callFriend() {
+            const friendId = document.getElementById('peer-id-input').value;
+            if(friendId && myStream) {
+                const call = peer.call(friendId, myStream);
+                call.on('stream', (remoteStream) => {
+                    playAudio(remoteStream);
+                });
+            }
+        }
+
+        function playAudio(stream) {
+            // Check if audio element for this stream already exists to avoid duplicates
+            const existingAudio = document.getElementById(stream.id);
+            if (existingAudio) return;
+
+            const audio = document.createElement('audio');
+            audio.id = stream.id;
+            audio.srcObject = stream;
+            audio.autoplay = true;
+            document.body.appendChild(audio);
+        }
+    </script>
+</body>
+</html>

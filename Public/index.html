@@ -20,6 +20,20 @@
         #yt-input { flex: 1; }
         .voice-box { margin-bottom: 20px; padding: 15px; background: #2a2a2a; border-radius: 5px; border: 1px solid #444; }
         #my-id { font-weight: bold; color: #4CAF50; background: #111; padding: 2px 6px; border-radius: 3px; }
+        .username-box { margin-bottom: 15px; padding: 10px; background: #1a1a1a; border-radius: 5px; border: 1px solid #444; }
+        .username-box input { width: calc(100% - 22px); margin-bottom: 5px; }
+        .username-box button { width: 100%; }
+        .user-list { margin-top: 15px; padding: 10px; background: #1a1a1a; border-radius: 5px; border: 1px solid #444; max-height: 150px; overflow-y: auto; }
+        .user-list h4 { margin: 0 0 8px 0; color: #4CAF50; font-size: 0.9rem; }
+        .user-item { padding: 5px; font-size: 0.85rem; color: #b0b0b0; border-left: 2px solid #4CAF50; padding-left: 8px; margin-bottom: 3px; }
+        .chat-msg { margin-bottom: 8px; font-size: 0.95rem; line-height: 1.4; }
+        .chat-msg strong { color: #4CAF50; }
+        #video-container { display: flex; flex-wrap: wrap; gap: 10px; width: 100%; margin-bottom: 20px; justify-content: center; }
+        .video-tile { position: relative; display: flex; flex-direction: column; align-items: center; background: #1a1a1a; border: 2px solid #333; border-radius: 8px; overflow: hidden; flex: 0 0 calc(50% - 5px); min-height: 200px; }
+        .video-tile.speaking { border-color: #4CAF50; box-shadow: 0 0 10px rgba(76, 175, 80, 0.5); }
+        .video-tile video, .video-tile canvas { width: 100%; height: 100%; object-fit: cover; }
+        .video-tile .user-label { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0, 0, 0, 0.7); padding: 8px; text-align: center; font-weight: bold; color: #4CAF50; font-size: 0.9rem; }
+        .profile-picture { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 2rem; font-weight: bold; color: white; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -31,14 +45,26 @@
             <button onclick="changeVideo()">Sync Video</button>
         </div>
         <div id="player"></div>
+        <h3 style="margin-top: 20px; width: 100%; text-align: center;">Video Chat</h3>
+        <div id="video-container"></div>
     </div>
 
     <div class="sidebar">
+        <div class="username-box">
+            <h3 style="margin-top: 0;">Chat Name</h3>
+            <input type="text" id="username-input" placeholder="Enter your name...">
+            <button onclick="setUsername()">Set Name</button>
+        </div>
+
         <div class="voice-box">
             <h3>Voice Chat</h3>
             <p>Your ID: <span id="my-id">Connecting...</span></p>
             <input type="text" id="peer-id-input" placeholder="Friend's ID to call" style="width: calc(100% - 22px);">
             <button onclick="callFriend()" style="width: 100%; margin-top: 10px;">Call Friend</button>
+            <div class="user-list">
+                <h4>Connected Users</h4>
+                <div id="user-list"></div>
+            </div>
         </div>
 
         <h3>Text Chat</h3>
@@ -51,12 +77,23 @@
 
     <script>
         const socket = io();
+        let myUsername = 'Anonymous';
+
+        // --- 0. USERNAME MANAGEMENT ---
+        function setUsername() {
+            const input = document.getElementById('username-input');
+            if(input.value.trim() !== '') {
+                myUsername = input.value.trim();
+                socket.emit('set-username', myUsername);
+                input.value = '';
+            }
+        }
 
         // --- 1. TEXT CHAT ROUTINES ---
         function sendMessage() {
             const input = document.getElementById('chat-input');
             if(input.value.trim() !== '') {
-                socket.emit('chat-message', input.value);
+                socket.emit('chat-message', { username: myUsername, text: input.value });
                 input.value = '';
             }
         }
@@ -65,10 +102,28 @@
             if(e.key === 'Enter') sendMessage();
         }
 
-        socket.on('chat-message', (msg) => {
+        socket.on('chat-message', (data) => {
             const chatBox = document.getElementById('chat-box');
-            chatBox.innerHTML += `<div class="chat-msg"><strong>></strong> ${msg}</div>`;
+            const username = data.username || 'Anonymous';
+            const text = data.text || data; // Support old format too
+            chatBox.innerHTML += `<div class="chat-msg"><strong>${username}:</strong> ${text}</div>`;
             chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to bottom
+        });
+
+        // --- 1b. USER LIST MANAGEMENT ---
+        socket.on('users-list', (users) => {
+            const userList = document.getElementById('user-list');
+            userList.innerHTML = '';
+            users.forEach(user => {
+                const userItem = document.createElement('div');
+                userItem.className = 'user-item';
+                const profileImg = document.createElement('img');
+                profileImg.src = generateProfilePicture(user);
+                profileImg.style = 'width: 24px; height: 24px; border-radius: 50%; margin-right: 8px; vertical-align: middle;';
+                userItem.appendChild(profileImg);
+                userItem.appendChild(document.createTextNode(user));
+                userList.appendChild(userItem);
+            });
         });
 
         // --- 2. YOUTUBE IFRAME SYNC ---
@@ -102,19 +157,74 @@
             }
         });
 
-        // --- 3. WEB RTC VOICE CHAT ---
+        // --- 3. WEB RTC VIDEO CHAT ---
         const peer = new Peer(); // Hooks directly into PeerJS free cloud servers
         let myStream;
+        let myPeerId;
+        let activeStreams = {}; // Track active streams
+        let audioContexts = {}; // Track audio analysis for speaker detection
+
+        // Generate a profile picture based on username
+        function generateProfilePicture(username) {
+            const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2'];
+            const hash = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            const color = colors[hash % colors.length];
+            const initials = username.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = 80;
+            canvas.height = 80;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, 80, 80);
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 32px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(initials, 40, 40);
+            return canvas.toDataURL();
+        }
+
+        // Detect if audio stream is active (user speaking)
+        function detectSpeaking(stream) {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const analyser = audioContext.createAnalyser();
+            const source = audioContext.createMediaStreamAudioSource(stream);
+            source.connect(analyser);
+            
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            audioContexts[stream.id] = { analyser, dataArray, audioContext };
+            
+            const checkVolume = () => {
+                analyser.getByteFrequencyData(dataArray);
+                const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                return average > 30; // Threshold for speaking
+            };
+            
+            return checkVolume;
+        }
 
         peer.on('open', (id) => {
+            myPeerId = id;
             document.getElementById('my-id').innerText = id;
+            socket.emit('register-peer', id); // Register peer ID with server
+            // Add my own video feed
+            addVideoTile(id, 'You (Local)', true);
         });
 
-        // Request microphone access from browser
-        navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(stream => {
+        // Request microphone AND camera access
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
             myStream = stream;
+            const videoContainer = document.getElementById('video-container');
+            const myVideoTile = videoContainer.querySelector(`[data-stream-id="${myPeerId}"]`);
+            if (myVideoTile) {
+                const video = myVideoTile.querySelector('video');
+                if (video) {
+                    video.srcObject = stream;
+                }
+            }
         }).catch(err => {
-            alert("Microphone access is required for voice chat!");
+            alert("Camera and Microphone access is required for video chat!");
             console.error(err);
         });
 
@@ -122,7 +232,7 @@
         peer.on('call', (call) => {
             call.answer(myStream); 
             call.on('stream', (remoteStream) => {
-                playAudio(remoteStream);
+                playVideo(remoteStream, call.peer);
             });
         });
 
@@ -132,21 +242,60 @@
             if(friendId && myStream) {
                 const call = peer.call(friendId, myStream);
                 call.on('stream', (remoteStream) => {
-                    playAudio(remoteStream);
+                    playVideo(remoteStream, call.peer);
                 });
             }
         }
 
-        function playAudio(stream) {
-            // Check if audio element for this stream already exists to avoid duplicates
-            const existingAudio = document.getElementById(stream.id);
-            if (existingAudio) return;
+        function addVideoTile(streamId, username, isLocal = false) {
+            const container = document.getElementById('video-container');
+            
+            // Check if tile already exists
+            if (container.querySelector(`[data-stream-id="${streamId}"]`)) return;
+            
+            const tile = document.createElement('div');
+            tile.className = 'video-tile';
+            tile.setAttribute('data-stream-id', streamId);
+            tile.setAttribute('data-username', username);
+            
+            const video = document.createElement('video');
+            video.autoplay = true;
+            video.muted = isLocal; // Mute local audio
+            video.playsinline = true;
+            
+            const label = document.createElement('div');
+            label.className = 'user-label';
+            label.textContent = username;
+            
+            tile.appendChild(video);
+            tile.appendChild(label);
+            container.appendChild(tile);
+        }
 
-            const audio = document.createElement('audio');
-            audio.id = stream.id;
-            audio.srcObject = stream;
-            audio.autoplay = true;
-            document.body.appendChild(audio);
+        function playVideo(stream, peerId) {
+            activeStreams[stream.id] = { stream, peerId };
+            const tile = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`);
+            
+            if (!tile) {
+                // Get username from server (we'll use peerId for now, real username would come from server)
+                addVideoTile(stream.id, `Peer ${peerId.slice(0, 8)}`);
+            }
+            
+            const video = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`)?.querySelector('video');
+            if (video) {
+                video.srcObject = stream;
+                
+                // Detect speaking
+                const checkSpeaking = detectSpeaking(stream);
+                setInterval(() => {
+                    const tile = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`);
+                    if (checkSpeaking()) {
+                        tile?.classList.add('speaking');
+                    } else {
+                        tile?.classList.remove('speaking');
+                    }
+                }, 100);
+            }
         }
     </script>
 </body>

@@ -235,10 +235,11 @@
             if (index < 0 || index >= playlist.length) return;
             
             const item = playlist[index];
-            const id = parseYouTubeId(item.id);
             currentPlayingIndex = index;
-            loadMedia('youtube', id);
-            socket.emit('video-change', { platform: 'youtube', id });
+            const platform = item.platform || 'youtube';
+            const idOrUrl = item.id || item.url;
+            loadMedia(platform, idOrUrl, item.url);
+            socket.emit('video-change', { platform, id: item.id, url: item.url });
             renderPlaylist();
         }
 
@@ -359,7 +360,10 @@
         function replayFromQueue(index) {
             if (index < 0 || index >= queue.length) return;
             const item = queue[index];
-            socket.emit('video-change', { platform: item.platform || 'youtube', id: item.id });
+            const platform = item.platform || 'youtube';
+            const idOrUrl = item.id || item.url;
+            loadMedia(platform, idOrUrl, item.url);
+            socket.emit('video-change', { platform, id: item.id, url: item.url });
         }
 
         // --- 1. TEXT CHAT ROUTINES ---
@@ -646,29 +650,47 @@
             const input = document.getElementById('yt-input').value;
             if (!input) return;
 
-            try {
-                const id = parseYouTubeId(input);
-                currentPlatform = 'youtube';
-                currentMediaId = id;
+            const parsed = parseInput(input);
+            currentPlatform = parsed.platform;
+            currentMediaId = parsed.id || parsed.url;
 
-                socket.emit('video-change', { platform: 'youtube', id });
-                loadMedia('youtube', id);
-                console.log(`[Hangout] Loading YouTube video: ${id}`);
-            } catch (err) {
-                console.error('[Hangout] Error loading video:', err);
-                alert('Error loading video. Check the console for details.');
+            socket.emit('video-change', { platform: parsed.platform, id: parsed.id || parsed.url, url: parsed.url });
+            loadMedia(parsed.platform, parsed.id || parsed.url, parsed.url);
+            console.log(`[Hangout] Loading ${parsed.platform}: ${parsed.id || parsed.url}`);
+        }
+
+        function loadMedia(platform, idOrUrl, url) {
+            switch ((platform||'').toLowerCase()) {
+                case 'vimeo':
+                    addToHistory('vimeo', idOrUrl, url);
+                    loadVimeoVideo(idOrUrl);
+                    break;
+                case 'uguu':
+                    addToHistory('uguu', idOrUrl, url);
+                    loadUguuMedia(idOrUrl);
+                    break;
+                case 'bandcamp':
+                    addToHistory('bandcamp', idOrUrl, url);
+                    loadBandcamp(url || idOrUrl);
+                    break;
+                default:
+                    const finalId = idOrUrl; // YouTube id/url
+                    addToHistory('youtube', finalId, url);
+                    loadYouTubeVideo(finalId);
+                    break;
             }
         }
 
-        function loadMedia(platform, id) {
-            const finalId = parseYouTubeId(id);
-            addToHistory('youtube', finalId);
-            loadYouTubeVideo(finalId);
-        }
-
         socket.on('video-change', (data) => {
-            const id = typeof data === 'string' ? parseYouTubeId(data) : parseYouTubeId(data.id || currentMediaId);
-            loadMedia('youtube', id);
+            if (!data) return;
+            if (typeof data === 'string') {
+                const parsed = parseInput(data);
+                loadMedia(parsed.platform, parsed.id || parsed.url, parsed.url);
+                return;
+            }
+            const platform = data.platform || 'youtube';
+            const id = data.id || data.url || currentMediaId;
+            loadMedia(platform, id, data.url);
         });
 
         // --- 3. WEB RTC VIDEO CHAT ---

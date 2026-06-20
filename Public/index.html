@@ -115,7 +115,7 @@
 <body>
     <div class="header">
         <div class="controls">
-            <input type="text" id="yt-input" placeholder="Enter YouTube video ID or URL...">
+            <input type="text" id="yt-input" placeholder="Enter YouTube/Vimeo/Bandcamp/Uguu URL or ID...">
             <button onclick="changeVideo()">Load Video</button>
             <button onclick="addToQueue()" style="background:#2196F3;">Add to Queue</button>
         </div>
@@ -190,8 +190,8 @@
         }
 
         // --- 0b. WATCH HISTORY MANAGEMENT ---
-        function addToHistory(platform, id) {
-            const title = getPlaylistTitle(platform, id);
+        function addToHistory(platform, id, url) {
+            const title = getPlaylistTitle(platform, id, url);
             const item = { platform, id, title, timestamp: new Date().toLocaleTimeString() };
             
             // Check if same item was just added (avoid duplicates within 2 seconds)
@@ -209,9 +209,15 @@
             renderPlaylist();
         }
 
-        function getPlaylistTitle(platform, id) {
-            const title = id.length > 11 ? id.slice(0, 11) : id;
-            return `YouTube: ${title}...`;
+        function getPlaylistTitle(platform, id, url) {
+            const short = (id || url || '').toString();
+            const title = short.length > 24 ? short.slice(0, 24) + '...' : short;
+            switch ((platform||'').toLowerCase()) {
+                case 'vimeo': return `Vimeo: ${title}`;
+                case 'bandcamp': return `Bandcamp: ${title}`;
+                case 'uguu': return `Uguu: ${title}`;
+                default: return `YouTube: ${title}`;
+            }
         }
 
         function deleteFromHistory(index) {
@@ -251,8 +257,17 @@
                 
                 const title = document.createElement('span');
                 title.className = 'playlist-item-title';
-                title.textContent = item.title;
-                title.title = item.title; // Show full title on hover
+                // Prepend platform icon
+                const icon = (function(p){
+                    switch((p||'').toLowerCase()){
+                        case 'vimeo': return '🎬 ';
+                        case 'bandcamp': return '🎵 ';
+                        case 'uguu': return '🔗 ';
+                        default: return '▶️ ';
+                    }
+                })(item.platform);
+                title.textContent = icon + (item.title || item.id || 'Unknown');
+                title.title = (item.title || item.id || 'Unknown'); // Show full title on hover
                 title.onclick = () => replayFromHistory(index);
                 
                 const deleteBtn = document.createElement('button');
@@ -283,8 +298,8 @@
         function addToQueue() {
             const input = document.getElementById('yt-input').value;
             if (!input) return;
-            const id = parseYouTubeId(input);
-            const item = { platform: 'youtube', id: id, title: getPlaylistTitle('youtube', id), requestedBy: myUsername };
+            const parsed = parseInput(input);
+            const item = { platform: parsed.platform, id: parsed.id, url: parsed.url, title: getPlaylistTitle(parsed.platform, parsed.id, parsed.url), requestedBy: myUsername };
             socket.emit('queue-add', item);
         }
 
@@ -302,7 +317,15 @@
 
                 const title = document.createElement('span');
                 title.className = 'playlist-item-title';
-                title.textContent = item.title || (item.id || 'Unknown');
+                const icon = (function(p){
+                    switch((p||'').toLowerCase()){
+                        case 'vimeo': return '🎬 ';
+                        case 'bandcamp': return '🎵 ';
+                        case 'uguu': return '🔗 ';
+                        default: return '▶️ ';
+                    }
+                })(item.platform);
+                title.textContent = icon + (item.title || (item.id || 'Unknown'));
                 title.title = `${item.title || item.id} — requested by ${item.requestedBy || 'Anonymous'}`;
                 title.onclick = () => replayFromQueue(index);
 
@@ -435,15 +458,31 @@
             }
         }
 
-        function parseYouTubeId(input) {
+        function parseInput(input) {
             const trimmed = input.trim();
-            const idRegex = /^[a-zA-Z0-9_-]{11}$/;
-            if (idRegex.test(trimmed)) {
-                return trimmed;
+
+            // YouTube ID or URL
+            const ytIdRegex = /^[a-zA-Z0-9_-]{11}$/;
+            if (ytIdRegex.test(trimmed)) return { platform: 'youtube', id: trimmed, url: null };
+            const ytMatch = trimmed.match(/^.*(?:youtu.be\/|youtube.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/))([^#\&\?]{11}).*/);
+            if (ytMatch && ytMatch[1]) return { platform: 'youtube', id: ytMatch[1], url: null };
+
+            // Vimeo (numeric id)
+            const vimeoMatch = trimmed.match(/vimeo\.com\/(?:video\/)?(\d+)/i);
+            if (vimeoMatch && vimeoMatch[1]) return { platform: 'vimeo', id: vimeoMatch[1], url: null };
+
+            // Uguu direct file links (common extensions)
+            if (/uguu\.su|uguu\.moe|uguu\.sh/i.test(trimmed) || /\.(mp4|webm|ogg|mp3|m4a)(\?|$)/i.test(trimmed)) {
+                return { platform: 'uguu', id: trimmed, url: trimmed };
             }
 
-            const match = trimmed.match(/^.*(?:youtu.be\/|youtube.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/))([^#\&\?]{11}).*/);
-            return match && match[1] ? match[1] : trimmed;
+            // Bandcamp URL
+            if (/bandcamp\.com/i.test(trimmed)) {
+                return { platform: 'bandcamp', id: trimmed, url: trimmed };
+            }
+
+            // Fallback: treat as YouTube-like id or raw url
+            return { platform: 'youtube', id: trimmed, url: trimmed };
         }
 
         function createYouTubePlayer(videoId) {
@@ -498,6 +537,109 @@
             } else {
                 createYouTubePlayer(videoId);
             }
+        }
+
+        // --- Vimeo support ---
+        let vimeoPlayer = null;
+        function loadVimeoVideo(videoId) {
+            // Remove existing players
+            destroyCurrentPlayer();
+            const container = document.getElementById('player');
+            const iframe = document.createElement('iframe');
+            iframe.src = `https://player.vimeo.com/video/${videoId}?api=1&player_id=vimeo-player`;
+            iframe.id = 'vimeo-player';
+            iframe.width = '100%';
+            iframe.height = '100%';
+            iframe.frameBorder = '0';
+            iframe.allow = 'autoplay; fullscreen; picture-in-picture';
+            container.appendChild(iframe);
+
+            // Load Vimeo Player SDK dynamically if needed
+            if (typeof Vimeo === 'undefined') {
+                const s = document.createElement('script');
+                s.src = 'https://player.vimeo.com/api/player.js';
+                s.onload = () => { vimeoPlayer = new Vimeo.Player(iframe); attachVimeoEvents(); };
+                document.body.appendChild(s);
+            } else {
+                vimeoPlayer = new Vimeo.Player(iframe);
+                attachVimeoEvents();
+            }
+        }
+
+        function attachVimeoEvents() {
+            if (!vimeoPlayer) return;
+            vimeoPlayer.on('ended', function() {
+                socket.emit('request-next');
+            });
+        }
+
+        // --- Uguu (direct file) support ---
+        let htmlMediaElement = null;
+        function loadUguuMedia(url) {
+            destroyCurrentPlayer();
+            const container = document.getElementById('player');
+            const isAudio = /\.(mp3|m4a|wav|ogg)(\?|$)/i.test(url);
+            const el = document.createElement(isAudio ? 'audio' : 'video');
+            el.src = url;
+            el.controls = true;
+            el.autoplay = false;
+            el.style.width = '100%';
+            el.style.height = '100%';
+            el.onended = () => { socket.emit('request-next'); };
+            container.appendChild(el);
+            htmlMediaElement = el;
+        }
+
+        // --- Bandcamp support (best-effort embed / fallback link) ---
+        function loadBandcamp(url) {
+            destroyCurrentPlayer();
+            const container = document.getElementById('player');
+            // First, try Bandcamp oEmbed to get an official embed snippet
+            const oembedUrl = `https://bandcamp.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+            fetch(oembedUrl).then(r => r.json()).then(data => {
+                if (data && data.html) {
+                    container.innerHTML = data.html;
+                } else {
+                    // Fallback to iframe/link
+                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Unable to embed content.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
+                }
+            }).catch(() => {
+                // If oEmbed fails (CORS or other), try iframe then fallback to link
+                try {
+                    const iframe = document.createElement('iframe');
+                    iframe.src = url;
+                    iframe.width = '100%';
+                    iframe.height = '100%';
+                    iframe.frameBorder = '0';
+                    iframe.allow = 'autoplay; encrypted-media';
+                    container.appendChild(iframe);
+
+                    setTimeout(() => {
+                        try {
+                            const doc = iframe.contentDocument || iframe.contentWindow.document;
+                        } catch (e) {
+                            container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Bandcamp embedding may be blocked by the site.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
+                        }
+                    }, 800);
+                } catch (e) {
+                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Cannot embed Bandcamp.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
+                }
+            });
+        }
+
+        function destroyCurrentPlayer() {
+            // Clear YT player
+            try { if (player && player.destroy) { player.destroy(); } } catch (e) {}
+            player = null; playerReady = false; pendingYouTubeId = null; ytApiReady = !!window.YT;
+            // Clear Vimeo
+            try { if (vimeoPlayer && typeof vimeoPlayer.unload === 'function') vimeoPlayer.unload(); } catch (e) {}
+            vimeoPlayer = null;
+            // Remove HTML5 media
+            try { if (htmlMediaElement) { htmlMediaElement.pause(); htmlMediaElement.src = ''; htmlMediaElement.remove(); } } catch (e) {}
+            htmlMediaElement = null;
+            // Clear container
+            const container = document.getElementById('player');
+            container.innerHTML = '';
         }
 
         function changeVideo() {

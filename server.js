@@ -9,7 +9,8 @@ const io = new Server(server);
 // Serve frontend files from the 'Public' directory
 app.use(express.static('Public'));
 
-let currentVideo = 'dQw4w9WgXcQ'; // Default video
+let currentVideo = { platform: 'youtube', id: 'dQw4w9WgXcQ' }; // Default video
+let playlist = []; // Shared playlist for all users
 let users = {}; // Track users: { socketId: { username, peerId } }
 let speakingUsers = new Set(); // Track who's currently speaking
 
@@ -22,6 +23,9 @@ io.on('connection', (socket) => {
 
     // Send the current video to the new user immediately
     socket.emit('video-change', currentVideo);
+
+    // Send the current playlist to the new user
+    socket.emit('playlist-update', playlist);
 
     // Handle Peer ID registration (for WebRTC)
     socket.on('register-peer', (peerId) => {
@@ -49,9 +53,21 @@ io.on('connection', (socket) => {
     });
 
     // Handle YouTube Video Sync
-    socket.on('video-change', (videoId) => {
-        currentVideo = videoId;
-        io.emit('video-change', videoId); 
+    socket.on('video-change', (videoData) => {
+        // Handle both old format (string) and new format (object)
+        if (typeof videoData === 'string') {
+            currentVideo = { platform: 'youtube', id: videoData };
+        } else {
+            currentVideo = videoData;
+        }
+        io.emit('video-change', currentVideo); 
+    });
+
+    // Handle Playlist Updates
+    socket.on('playlist-update', (newPlaylist) => {
+        playlist = newPlaylist;
+        io.emit('playlist-update', playlist);
+        console.log(`User ${socket.id} updated playlist. Items: ${playlist.length}`);
     });
 
     // Handle speaking status

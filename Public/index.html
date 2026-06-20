@@ -7,77 +7,183 @@
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; display: flex; margin: 0; height: 100vh; background: #121212; color: #e0e0e0; }
-        .main-content { flex: 2; padding: 20px; display: flex; flex-direction: column; align-items: center; border-right: 1px solid #2d2d2d; }
-        .sidebar { flex: 1; display: flex; flex-direction: column; padding: 20px; background: #1e1e1e; }
-        #chat-box { flex: 1; overflow-y: auto; margin-bottom: 10px; padding: 10px; background: #0b0b0b; border-radius: 5px; border: 1px solid #333; }
-        .chat-msg { margin-bottom: 8px; font-size: 0.95rem; line-height: 1.4; }
-        input, button { padding: 10px; margin-top: 5px; border-radius: 5px; border: 1px solid #444; background: #2a2a2a; color: white; }
-        input:focus { border-color: #4CAF50; outline: none; }
-        button { background: #4CAF50; color: white; cursor: pointer; font-weight: bold; border: none; }
+        * { box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; margin: 0; height: 100vh; background: #121212; color: #e0e0e0; display: flex; flex-direction: column; }
+        
+        .header { padding: 10px 20px; background: #1e1e1e; border-bottom: 1px solid #2d2d2d; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .controls { display: flex; gap: 8px; flex: 1; min-width: 250px; }
+        #yt-input { flex: 1; padding: 8px; border-radius: 5px; border: 1px solid #444; background: #2a2a2a; color: white; }
+        #yt-input:focus { border-color: #4CAF50; outline: none; }
+        button { padding: 8px 15px; border-radius: 5px; border: none; background: #4CAF50; color: white; cursor: pointer; font-weight: bold; }
         button:hover { background: #45a049; }
-        .controls { display: flex; gap: 10px; width: 100%; margin-bottom: 20px; }
-        #yt-input { flex: 1; }
-        .voice-box { margin-bottom: 20px; padding: 15px; background: #2a2a2a; border-radius: 5px; border: 1px solid #444; }
-        #my-id { font-weight: bold; color: #4CAF50; background: #111; padding: 2px 6px; border-radius: 3px; }
-        .username-box { margin-bottom: 15px; padding: 10px; background: #1a1a1a; border-radius: 5px; border: 1px solid #444; }
-        .username-box input { width: calc(100% - 22px); margin-bottom: 5px; }
+
+        .main-container { display: flex; flex: 1; overflow: hidden; }
+        
+        .video-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        #player { flex: 1; width: 100%; background: #000; }
+        
+        .video-chat-section { height: 150px; background: #1a1a1a; border-top: 1px solid #2d2d2d; padding: 10px; display: flex; flex-direction: column; overflow: hidden; }
+        .video-chat-section h4 { margin: 0 0 8px 0; font-size: 0.85rem; color: #4CAF50; }
+        #video-container { display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; padding: 5px 0; }
+        #video-container::-webkit-scrollbar { height: 6px; }
+        #video-container::-webkit-scrollbar-track { background: #0b0b0b; }
+        #video-container::-webkit-scrollbar-thumb { background: #4CAF50; border-radius: 3px; }
+        
+        .video-tile { position: relative; flex-shrink: 0; width: 140px; height: 100px; background: #0b0b0b; border: 2px solid #333; border-radius: 6px; overflow: hidden; }
+        .video-tile.speaking { border-color: #4CAF50; box-shadow: 0 0 8px rgba(76, 175, 80, 0.6); }
+        .video-tile video { width: 100%; height: 100%; object-fit: cover; }
+        .video-tile .user-label { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0, 0, 0, 0.8); padding: 4px; text-align: center; font-weight: bold; color: #4CAF50; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .sidebar { width: 320px; background: #1e1e1e; border-left: 1px solid #2d2d2d; display: flex; flex-direction: column; overflow: hidden; }
+        .sidebar-toggle { display: none; background: none; border: none; color: #e0e0e0; font-size: 1.5rem; padding: 5px 10px; }
+
+        .sidebar-content { display: flex; flex-direction: column; overflow-y: auto; padding: 15px; gap: 15px; }
+        .sidebar-content::-webkit-scrollbar { width: 6px; }
+        .sidebar-content::-webkit-scrollbar-track { background: #0b0b0b; }
+        .sidebar-content::-webkit-scrollbar-thumb { background: #4CAF50; border-radius: 3px; }
+
+        .username-box { padding: 10px; background: #2a2a2a; border-radius: 5px; border: 1px solid #444; }
+        .username-box h3 { margin: 0 0 8px 0; font-size: 0.95rem; }
+        .username-box input { width: 100%; padding: 8px; border-radius: 3px; border: 1px solid #444; background: #1a1a1a; color: white; margin-bottom: 8px; }
         .username-box button { width: 100%; }
-        .user-list { margin-top: 15px; padding: 10px; background: #1a1a1a; border-radius: 5px; border: 1px solid #444; max-height: 150px; overflow-y: auto; }
-        .user-list h4 { margin: 0 0 8px 0; color: #4CAF50; font-size: 0.9rem; }
-        .user-item { padding: 5px; font-size: 0.85rem; color: #b0b0b0; border-left: 2px solid #4CAF50; padding-left: 8px; margin-bottom: 3px; }
-        .chat-msg { margin-bottom: 8px; font-size: 0.95rem; line-height: 1.4; }
+
+        .voice-box { padding: 10px; background: #2a2a2a; border-radius: 5px; border: 1px solid #444; }
+        .voice-box h3 { margin: 0 0 8px 0; font-size: 0.95rem; }
+        .voice-box p { margin: 5px 0; font-size: 0.85rem; }
+        #my-id { font-weight: bold; color: #4CAF50; background: #111; padding: 2px 6px; border-radius: 3px; font-size: 0.75rem; }
+        .voice-box input { width: 100%; padding: 8px; border-radius: 3px; border: 1px solid #444; background: #1a1a1a; color: white; margin-bottom: 8px; }
+        .voice-box button { width: 100%; }
+
+        .user-list { padding: 10px; background: #1a1a1a; border-radius: 5px; border: 1px solid #444; }
+        .user-list h4 { margin: 0 0 8px 0; color: #4CAF50; font-size: 0.85rem; }
+        #user-list { max-height: 100px; overflow-y: auto; }
+        .user-item { padding: 5px; font-size: 0.8rem; color: #b0b0b0; border-left: 2px solid #4CAF50; padding-left: 8px; margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
+        .user-item img { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; }
+
+        #chat-box { flex: 1; overflow-y: auto; padding: 10px; background: #0b0b0b; border-radius: 5px; border: 1px solid #333; margin-bottom: 8px; }
+        .chat-msg { margin-bottom: 8px; font-size: 0.85rem; line-height: 1.4; }
         .chat-msg strong { color: #4CAF50; }
-        #video-container { display: flex; flex-wrap: wrap; gap: 10px; width: 100%; margin-bottom: 20px; justify-content: center; }
-        .video-tile { position: relative; display: flex; flex-direction: column; align-items: center; background: #1a1a1a; border: 2px solid #333; border-radius: 8px; overflow: hidden; flex: 0 0 calc(50% - 5px); min-height: 200px; }
-        .video-tile.speaking { border-color: #4CAF50; box-shadow: 0 0 10px rgba(76, 175, 80, 0.5); }
-        .video-tile video, .video-tile canvas { width: 100%; height: 100%; object-fit: cover; }
-        .video-tile .user-label { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0, 0, 0, 0.7); padding: 8px; text-align: center; font-weight: bold; color: #4CAF50; font-size: 0.9rem; }
-        .profile-picture { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 2rem; font-weight: bold; color: white; margin-bottom: 10px; }
+        
+        .chat-input-section { display: flex; gap: 5px; }
+        #chat-input { flex: 1; padding: 8px; border-radius: 3px; border: 1px solid #444; background: #1a1a1a; color: white; }
+        #chat-input:focus { border-color: #4CAF50; outline: none; }
+
+        input { font-size: 0.9rem; }
+
+        /* Responsive Design */
+        @media (max-width: 1024px) {
+            .sidebar { width: 280px; }
+            .sidebar-content { padding: 12px; gap: 12px; }
+        }
+
+        @media (max-width: 768px) {
+            .header { flex-direction: column; }
+            .controls { min-width: 100%; }
+            .main-container { flex-direction: column; }
+            .sidebar { width: 100%; height: auto; max-height: 300px; border-left: none; border-top: 1px solid #2d2d2d; }
+            .video-section { flex: 1; }
+            .video-chat-section { height: 120px; }
+            .video-tile { width: 120px; height: 90px; }
+            .sidebar-toggle { display: block; }
+        }
+
+        @media (max-width: 480px) {
+            .header { padding: 8px 12px; gap: 6px; }
+            .controls input, button { padding: 6px 8px; font-size: 0.85rem; }
+            .video-chat-section { height: 100px; padding: 8px; }
+            .video-tile { width: 100px; height: 75px; }
+            .sidebar { max-height: 250px; }
+            .sidebar-content { padding: 10px; gap: 10px; }
+            .username-box, .voice-box, .user-list { padding: 8px; }
+            .username-box h3, .voice-box h3 { font-size: 0.9rem; }
+            #chat-box { min-height: 120px; }
+        }
+
+        .hidden-sidebar { display: none; }
+
+        .playlist-box { padding: 10px; background: #2a2a2a; border-radius: 5px; border: 1px solid #444; }
+        .playlist-box h3 { margin: 0 0 8px 0; font-size: 0.95rem; }
+        .playlist-controls { display: flex; gap: 5px; margin-bottom: 8px; }
+        .playlist-controls input { flex: 1; padding: 6px; border-radius: 3px; border: 1px solid #444; background: #1a1a1a; color: white; font-size: 0.8rem; }
+        .playlist-controls button { padding: 6px 12px; font-size: 0.8rem; }
+        #playlist { max-height: 150px; overflow-y: auto; background: #1a1a1a; border-radius: 3px; border: 1px solid #333; }
+        .playlist-item { padding: 8px; margin-bottom: 4px; background: #252525; border-left: 3px solid #4CAF50; border-radius: 3px; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; cursor: pointer; transition: background 0.2s; }
+        .playlist-item:hover { background: #2a2a2a; }
+        .playlist-item.playing { background: #4CAF50; color: #000; font-weight: bold; border-left-color: #fff; }
+        .playlist-item-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .playlist-item-delete { background: #ff6b6b; border: none; color: white; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 0.7rem; }
+        .playlist-item-delete:hover { background: #ff5252; }
     </style>
 </head>
 <body>
-
-    <div class="main-content">
-        <h2>Watch Together</h2>
+    <div class="header">
         <div class="controls">
-            <input type="text" id="yt-input" placeholder="Paste YouTube Video ID (e.g. dQw4w9WgXcQ)">
-            <button onclick="changeVideo()">Sync Video</button>
+            <input type="text" id="yt-input" placeholder="YouTube, Vimeo, Rumble, Bandcamp, SoundCloud, uguu link or ID...">
+            <button onclick="changeVideo()">Load Video</button>
         </div>
-        <div id="player"></div>
-        <h3 style="margin-top: 20px; width: 100%; text-align: center;">Video Chat</h3>
-        <div id="video-container"></div>
+        <button class="sidebar-toggle" onclick="toggleSidebar()">☰ Chat</button>
     </div>
 
-    <div class="sidebar">
-        <div class="username-box">
-            <h3 style="margin-top: 0;">Chat Name</h3>
-            <input type="text" id="username-input" placeholder="Enter your name...">
-            <button onclick="setUsername()">Set Name</button>
-        </div>
-
-        <div class="voice-box">
-            <h3>Voice Chat</h3>
-            <p>Your ID: <span id="my-id">Connecting...</span></p>
-            <input type="text" id="peer-id-input" placeholder="Friend's ID to call" style="width: calc(100% - 22px);">
-            <button onclick="callFriend()" style="width: 100%; margin-top: 10px;">Call Friend</button>
-            <div class="user-list">
-                <h4>Connected Users</h4>
-                <div id="user-list"></div>
+    <div class="main-container">
+        <div class="video-section">
+            <div id="player"></div>
+            <div class="video-chat-section">
+                <h4>Video Participants</h4>
+                <div id="video-container"></div>
             </div>
         </div>
 
-        <h3>Text Chat</h3>
-        <div id="chat-box"></div>
-        <div style="display: flex; gap: 5px;">
-            <input type="text" id="chat-input" placeholder="Type a message..." style="flex: 1;" onkeypress="handleKeyPress(event)">
-            <button onclick="sendMessage()">Send</button>
+        <div class="sidebar">
+            <div class="sidebar-content">
+                <div class="username-box">
+                    <h3>Your Name</h3>
+                    <input type="text" id="username-input" placeholder="Enter your name...">
+                    <button onclick="setUsername()">Set Name</button>
+                </div>
+
+                <div class="voice-box">
+                    <h3>Video Call</h3>
+                    <p>Your ID: <span id="my-id">Connecting...</span></p>
+                    <input type="text" id="peer-id-input" placeholder="Enter friend's ID to call">
+                    <button onclick="callFriend()">Call Friend</button>
+                    <div class="user-list">
+                        <h4>Connected Users</h4>
+                        <div id="user-list"></div>
+                    </div>
+                </div>
+
+                <div class="playlist-box">
+                    <h3>Playlist</h3>
+                    <div class="playlist-controls">
+                        <input type="text" id="playlist-input" placeholder="Paste URL or ID...">
+                        <button onclick="addToPlaylist()">Add</button>
+                    </div>
+                    <div id="playlist"></div>
+                </div>
+
+                <div style="flex: 1; display: flex; flex-direction: column; min-height: 200px;">
+                    <h3 style="margin: 0 0 8px 0; font-size: 0.95rem;">Text Chat</h3>
+                    <div id="chat-box"></div>
+                    <div class="chat-input-section">
+                        <input type="text" id="chat-input" placeholder="Message..." onkeypress="handleKeyPress(event)">
+                        <button onclick="sendMessage()">Send</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
         const socket = io();
         let myUsername = 'Anonymous';
+        let playlist = [];
+        let currentPlayingIndex = -1;
+
+        // Toggle sidebar on mobile
+        function toggleSidebar() {
+            const sidebar = document.querySelector('.sidebar');
+            sidebar.classList.toggle('hidden-sidebar');
+        }
 
         // --- 0. USERNAME MANAGEMENT ---
         function setUsername() {
@@ -88,6 +194,86 @@
                 input.value = '';
             }
         }
+
+        // --- 0b. PLAYLIST MANAGEMENT ---
+        function addToPlaylist() {
+            const input = document.getElementById('playlist-input');
+            if (!input.value.trim()) return;
+
+            const { platform, id } = detectPlatform(input.value);
+            const title = getPlaylistTitle(platform, id);
+            
+            const item = { platform, id, title };
+            playlist.push(item);
+            socket.emit('playlist-update', playlist);
+            renderPlaylist();
+            input.value = '';
+        }
+
+        function getPlaylistTitle(platform, id) {
+            switch(platform) {
+                case 'youtube': return `YouTube: ${id.slice(0, 8)}...`;
+                case 'vimeo': return `Vimeo: ${id.slice(0, 8)}...`;
+                case 'rumble': return `Rumble: ${id.slice(0, 8)}...`;
+                case 'bandcamp': return `Bandcamp: ${id.slice(0, 30)}...`;
+                case 'soundcloud': return `SoundCloud: ${id.slice(0, 30)}...`;
+                case 'uguu': return `File: ${id.split('/').pop().slice(0, 20)}...`;
+                default: return `Media: ${id.slice(0, 8)}...`;
+            }
+        }
+
+        function deleteFromPlaylist(index) {
+            if (currentPlayingIndex === index) {
+                currentPlayingIndex = -1;
+            } else if (currentPlayingIndex > index) {
+                currentPlayingIndex--;
+            }
+            playlist.splice(index, 1);
+            socket.emit('playlist-update', playlist);
+            renderPlaylist();
+        }
+
+        function playFromPlaylist(index) {
+            if (index < 0 || index >= playlist.length) return;
+            
+            const item = playlist[index];
+            currentPlayingIndex = index;
+            loadMedia(item.platform, item.id);
+            socket.emit('video-change', item);
+            renderPlaylist();
+        }
+
+        function renderPlaylist() {
+            const playlistDiv = document.getElementById('playlist');
+            playlistDiv.innerHTML = '';
+            
+            playlist.forEach((item, index) => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'playlist-item' + (index === currentPlayingIndex ? ' playing' : '');
+                
+                const title = document.createElement('span');
+                title.className = 'playlist-item-title';
+                title.textContent = item.title;
+                title.onclick = () => playFromPlaylist(index);
+                
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'playlist-item-delete';
+                deleteBtn.textContent = '✕';
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    deleteFromPlaylist(index);
+                };
+                
+                itemDiv.appendChild(title);
+                itemDiv.appendChild(deleteBtn);
+                playlistDiv.appendChild(itemDiv);
+            });
+        }
+
+        socket.on('playlist-update', (newPlaylist) => {
+            playlist = newPlaylist;
+            renderPlaylist();
+        });
 
         // --- 1. TEXT CHAT ROUTINES ---
         function sendMessage() {
@@ -126,34 +312,184 @@
             });
         });
 
-        // --- 2. YOUTUBE IFRAME SYNC ---
+        // --- 2. MULTI-PLATFORM VIDEO SYNC ---
         let player;
+        let currentPlatform = 'youtube';
+        let currentMediaId = 'dQw4w9WgXcQ';
+
         const tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         const firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
         function onYouTubeIframeAPIReady() {
+            createYouTubePlayer('dQw4w9WgXcQ');
+        }
+
+        function detectPlatform(input) {
+            // YouTube
+            if (input.includes('youtube.com') || input.includes('youtu.be')) {
+                const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+                const match = input.match(regExp);
+                const id = (match && match[2].length === 11) ? match[2] : input;
+                return { platform: 'youtube', id };
+            }
+            // Vimeo
+            else if (input.includes('vimeo.com')) {
+                const id = input.split('/').pop();
+                return { platform: 'vimeo', id };
+            }
+            // Rumble
+            else if (input.includes('rumble.com')) {
+                const id = input.split('/').pop().split('?')[0];
+                return { platform: 'rumble', id };
+            }
+            // Bandcamp
+            else if (input.includes('bandcamp.com')) {
+                return { platform: 'bandcamp', id: input };
+            }
+            // SoundCloud
+            else if (input.includes('soundcloud.com')) {
+                return { platform: 'soundcloud', id: input };
+            }
+            // uguu.se
+            else if (input.includes('uguu.se')) {
+                return { platform: 'uguu', id: input };
+            }
+            // YouTube ID only
+            else if (/^[a-zA-Z0-9_-]{11}$/.test(input)) {
+                return { platform: 'youtube', id: input };
+            }
+            // Generic URL - try to extract ID
+            else {
+                return { platform: 'youtube', id: input };
+            }
+        }
+
+        function createYouTubePlayer(videoId) {
+            if (player && player.destroy) {
+                player.destroy();
+            }
             player = new YT.Player('player', {
-                height: '360',
+                height: '100%',
                 width: '100%',
-                videoId: 'dQw4w9WgXcQ', 
+                videoId: videoId,
+                playerVars: { 'controls': 1 }
             });
         }
 
-        function changeVideo() {
-            const videoId = document.getElementById('yt-input').value;
-            // Extract ID if they paste a full link instead of just the ID
-            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-            const match = videoId.match(regExp);
-            const actualId = (match && match[2].length == 11) ? match[2] : videoId;
-
-            if(actualId) socket.emit('video-change', actualId);
+        function createVimeoPlayer(videoId) {
+            const playerDiv = document.getElementById('player');
+            playerDiv.innerHTML = `
+                <iframe src="https://player.vimeo.com/video/${videoId}" width="100%" height="100%" 
+                    frameborder="0" allow="autoplay; fullscreen; picture-in-picture" 
+                    allowfullscreen style="width: 100%; height: 100%;"></iframe>
+            `;
         }
 
-        socket.on('video-change', (videoId) => {
-            if (player && player.loadVideoById) {
-                player.loadVideoById(videoId);
+        function createRumblePlayer(videoId) {
+            const playerDiv = document.getElementById('player');
+            playerDiv.innerHTML = `
+                <iframe width="100%" height="100%" src="https://rumble.com/embed/${videoId}/" 
+                    frameborder="0" allowfullscreen style="width: 100%; height: 100%;"></iframe>
+            `;
+        }
+
+        function createBandcampPlayer(url) {
+            const playerDiv = document.getElementById('player');
+            playerDiv.innerHTML = `
+                <iframe style="width: 100%; height: 100%; border: none;" 
+                    src="https://bandcamp.com/EmbeddedPlayer/v=2/url=${encodeURIComponent(url)}/size=large/" 
+                    allowfullscreen></iframe>
+            `;
+        }
+
+        function createSoundCloudPlayer(url) {
+            const playerDiv = document.getElementById('player');
+            playerDiv.innerHTML = `
+                <iframe width="100%" height="100%" scrolling="no" frameborder="no" 
+                    src="https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&auto_play=false&hide_related=false&show_comments=true&show_user=true&show_reposts=false&visual=true" 
+                    style="width: 100%; height: 100%;"></iframe>
+            `;
+        }
+
+        function createUguuPlayer(fileUrl) {
+            const playerDiv = document.getElementById('player');
+            const isAudio = /\.(mp3|wav|flac|ogg|aac|m4a)$/i.test(fileUrl);
+            const isVideo = /\.(mp4|webm|mkv|avi|mov)$/i.test(fileUrl);
+            
+            if (isAudio) {
+                playerDiv.innerHTML = `
+                    <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000;">
+                        <audio controls style="width: 90%; margin-bottom: 20px;">
+                            <source src="${fileUrl}" type="audio/mpeg">
+                            Your browser does not support the audio element.
+                        </audio>
+                        <p style="color: #4CAF50;">Now playing audio file</p>
+                    </div>
+                `;
+            } else if (isVideo) {
+                playerDiv.innerHTML = `
+                    <video width="100%" height="100%" style="background: #000;" controls>
+                        <source src="${fileUrl}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                `;
+            } else {
+                playerDiv.innerHTML = `
+                    <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000; color: #e0e0e0;">
+                        <p>Unsupported file type from uguu.se</p>
+                    </div>
+                `;
+            }
+        }
+
+        function changeVideo() {
+            const input = document.getElementById('yt-input').value;
+            if (!input) return;
+
+            const { platform, id } = detectPlatform(input);
+            currentPlatform = platform;
+            currentMediaId = id;
+
+            // Emit to server for sync
+            socket.emit('video-change', { platform, id });
+
+            // Load locally
+            loadMedia(platform, id);
+        }
+
+        function loadMedia(platform, id) {
+            switch(platform) {
+                case 'youtube':
+                    createYouTubePlayer(id);
+                    break;
+                case 'vimeo':
+                    createVimeoPlayer(id);
+                    break;
+                case 'rumble':
+                    createRumblePlayer(id);
+                    break;
+                case 'bandcamp':
+                    createBandcampPlayer(id);
+                    break;
+                case 'soundcloud':
+                    createSoundCloudPlayer(id);
+                    break;
+                case 'uguu':
+                    createUguuPlayer(id);
+                    break;
+                default:
+                    createYouTubePlayer(id);
+            }
+        }
+
+        socket.on('video-change', (data) => {
+            // Handle both old format (string) and new format (object)
+            if (typeof data === 'string') {
+                loadMedia('youtube', data);
+            } else {
+                loadMedia(data.platform, data.id);
             }
         });
 

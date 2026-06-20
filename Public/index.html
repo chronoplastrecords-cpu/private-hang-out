@@ -117,6 +117,7 @@
         <div class="controls">
             <input type="text" id="yt-input" placeholder="Enter YouTube video ID or URL...">
             <button onclick="changeVideo()">Load Video</button>
+            <button onclick="addToQueue()" style="background:#2196F3;">Add to Queue</button>
         </div>
         <button class="sidebar-toggle" onclick="toggleSidebar()">☰ Chat</button>
     </div>
@@ -138,22 +139,6 @@
                     <button onclick="setUsername()">Set Name</button>
                 </div>
 
-                <div class="voice-box">
-                    <h3>Video Call</h3>
-                    <p>Your ID: <span id="my-id">Connecting...</span></p>
-                    <input type="text" id="peer-id-input" placeholder="Enter friend's ID to call">
-                    <button onclick="callFriend()">Call Friend</button>
-                    <div class="user-list">
-                        <h4>Connected Users</h4>
-                        <div id="user-list"></div>
-                    </div>
-                </div>
-
-                <div class="playlist-box">
-                    <h3>Watch History</h3>
-                    <div id="playlist"></div>
-                </div>
-
                 <div style="flex: 1; display: flex; flex-direction: column; min-height: 200px;">
                     <h3 style="margin: 0 0 8px 0; font-size: 0.95rem;">Text Chat</h3>
                     <div id="chat-box"></div>
@@ -161,6 +146,21 @@
                         <input type="text" id="chat-input" placeholder="Message..." onkeypress="handleKeyPress(event)">
                         <button onclick="sendMessage()">Send</button>
                     </div>
+                </div>
+
+                <div class="user-list">
+                    <h4>Connected Users</h4>
+                    <div id="user-list"></div>
+                </div>
+
+                <div class="playlist-box">
+                    <h3>Watch History</h3>
+                    <div id="playlist"></div>
+                </div>
+
+                <div class="playlist-box queue-box">
+                    <h3>Queue</h3>
+                    <div id="queue"></div>
                 </div>
             </div>
         </div>
@@ -171,6 +171,7 @@
         let myUsername = 'Anonymous';
         let playlist = [];
         let currentPlayingIndex = -1;
+        let queue = [];
 
         // Toggle sidebar on mobile
         function toggleSidebar() {
@@ -273,6 +274,71 @@
             renderPlaylist();
         });
 
+        // --- 2b. SHARED QUEUE MANAGEMENT (from server) ---
+        socket.on('queue-update', (newQueue) => {
+            queue = newQueue || [];
+            renderQueue();
+        });
+
+        function addToQueue() {
+            const input = document.getElementById('yt-input').value;
+            if (!input) return;
+            const id = parseYouTubeId(input);
+            const item = { platform: 'youtube', id: id, title: getPlaylistTitle('youtube', id), requestedBy: myUsername };
+            socket.emit('queue-add', item);
+        }
+
+        function renderQueue() {
+            const queueDiv = document.getElementById('queue');
+            queueDiv.innerHTML = '';
+            if (!queue || queue.length === 0) {
+                queueDiv.innerHTML = '<div style="padding: 10px; color: #888; text-align: center; font-size: 0.8rem;">Queue is empty</div>';
+                return;
+            }
+
+            queue.forEach((item, index) => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'playlist-item';
+
+                const title = document.createElement('span');
+                title.className = 'playlist-item-title';
+                title.textContent = item.title || (item.id || 'Unknown');
+                title.title = `${item.title || item.id} — requested by ${item.requestedBy || 'Anonymous'}`;
+                title.onclick = () => replayFromQueue(index);
+
+                const controls = document.createElement('div');
+
+                const upBtn = document.createElement('button');
+                upBtn.textContent = '↑';
+                upBtn.style = 'margin-right:6px;';
+                upBtn.onclick = (e) => { e.stopPropagation(); socket.emit('queue-move', { from: index, to: Math.max(0, index-1) }); };
+
+                const downBtn = document.createElement('button');
+                downBtn.textContent = '↓';
+                downBtn.style = 'margin-right:6px;';
+                downBtn.onclick = (e) => { e.stopPropagation(); socket.emit('queue-move', { from: index, to: Math.min(queue.length-1, index+1) }); };
+
+                const delBtn = document.createElement('button');
+                delBtn.textContent = '✕';
+                delBtn.className = 'playlist-item-delete';
+                delBtn.onclick = (e) => { e.stopPropagation(); socket.emit('queue-remove', index); };
+
+                controls.appendChild(upBtn);
+                controls.appendChild(downBtn);
+                controls.appendChild(delBtn);
+
+                itemDiv.appendChild(title);
+                itemDiv.appendChild(controls);
+                queueDiv.appendChild(itemDiv);
+            });
+        }
+
+        function replayFromQueue(index) {
+            if (index < 0 || index >= queue.length) return;
+            const item = queue[index];
+            socket.emit('video-change', { platform: item.platform || 'youtube', id: item.id });
+        }
+
         // --- 1. TEXT CHAT ROUTINES ---
         function sendMessage() {
             const input = document.getElementById('chat-input');
@@ -295,18 +361,55 @@
         });
 
         // --- 1b. USER LIST MANAGEMENT ---
+        let connectedPeerIds = new Set();
+
         socket.on('users-list', (users) => {
+            // users: [{ username, peerId }]
             const userList = document.getElementById('user-list');
             userList.innerHTML = '';
-            users.forEach(user => {
+
+            const peerIdsNow = new Set();
+
+            users.forEach(u => {
+                const username = u.username || 'Anonymous';
+                const peerId = u.peerId || null;
+
                 const userItem = document.createElement('div');
                 userItem.className = 'user-item';
                 const profileImg = document.createElement('img');
-                profileImg.src = generateProfilePicture(user);
+                profileImg.src = generateProfilePicture(username);
                 profileImg.style = 'width: 24px; height: 24px; border-radius: 50%; margin-right: 8px; vertical-align: middle;';
                 userItem.appendChild(profileImg);
-                userItem.appendChild(document.createTextNode(user));
+                userItem.appendChild(document.createTextNode(username));
                 userList.appendChild(userItem);
+
+                if (peerId) peerIdsNow.add(peerId);
+                // Auto-call new peers (group mesh)
+                if (peerId && myPeerId && peerId !== myPeerId && !connectedPeerIds.has(peerId) && myStream) {
+                    try {
+                        const call = peer.call(peerId, myStream);
+                        connectedPeerIds.add(peerId);
+                        call.on('stream', (remoteStream) => {
+                            playVideo(remoteStream, peerId);
+                        });
+                        call.on('close', () => {
+                            connectedPeerIds.delete(peerId);
+                        });
+                    } catch (err) {
+                        console.warn('Auto-call failed to', peerId, err);
+                    }
+                }
+            });
+
+            // Remove video tiles for peers that disappeared
+            const videoContainer = document.getElementById('video-container');
+            const tiles = Array.from(videoContainer.querySelectorAll('[data-peer-id]'));
+            tiles.forEach(t => {
+                const p = t.getAttribute('data-peer-id');
+                if (p && !peerIdsNow.has(p) && p !== myPeerId) {
+                    t.remove();
+                    connectedPeerIds.delete(p);
+                }
             });
         });
 
@@ -364,6 +467,13 @@
                             const pending = pendingYouTubeId;
                             pendingYouTubeId = null;
                             event.target.loadVideoById(pending);
+                        }
+                    },
+                    onStateChange: function(event) {
+                        // YT.PlayerState.ENDED === 0
+                        if (typeof YT !== 'undefined' && event.data === YT.PlayerState.ENDED) {
+                            // Ask server to advance to next queued item (server will emit video-change)
+                            socket.emit('request-next');
                         }
                     },
                     onError: function(event) {
@@ -470,21 +580,35 @@
             myPeerId = id;
             document.getElementById('my-id').innerText = id;
             socket.emit('register-peer', id); // Register peer ID with server
-            // Add my own video feed
-            addVideoTile(id, 'You (Local)', true);
+            // Add my own video feed when we have a stream
+            if (myStream) {
+                const videoContainer = document.getElementById('video-container');
+                addVideoTile(myPeerId, 'You (Local)', true, myPeerId);
+                const myTile = videoContainer.querySelector(`[data-peer-id="${myPeerId}"]`);
+                if (myTile) {
+                    const vid = myTile.querySelector('video');
+                    if (vid) vid.srcObject = myStream;
+                }
+            }
         });
 
         // Request microphone AND camera access
         navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
             myStream = stream;
             const videoContainer = document.getElementById('video-container');
-            const myVideoTile = videoContainer.querySelector(`[data-stream-id="${myPeerId}"]`);
-            if (myVideoTile) {
-                const video = myVideoTile.querySelector('video');
-                if (video) {
-                    video.srcObject = stream;
+            // Ensure local tile is created and bound
+            if (myPeerId) {
+                addVideoTile(myPeerId, 'You (Local)', true, myPeerId);
+                const myVideoTile = videoContainer.querySelector(`[data-peer-id="${myPeerId}"]`);
+                if (myVideoTile) {
+                    const video = myVideoTile.querySelector('video');
+                    if (video) video.srcObject = stream;
                 }
             }
+
+            // Auto-call existing peers now that we have a stream
+            // Request current users from server via emitting a no-op to trigger users-list or rely on previous users-list updates
+            // Any peers discovered via 'users-list' handler will be auto-called when myStream is present
         }).catch(err => {
             alert("Camera and Microphone access is required for video chat!");
             console.error(err);
@@ -509,7 +633,7 @@
             }
         }
 
-        function addVideoTile(streamId, username, isLocal = false) {
+        function addVideoTile(streamId, username, isLocal = false, peerId = null) {
             const container = document.getElementById('video-container');
             
             // Check if tile already exists
@@ -518,6 +642,7 @@
             const tile = document.createElement('div');
             tile.className = 'video-tile';
             tile.setAttribute('data-stream-id', streamId);
+            if (peerId) tile.setAttribute('data-peer-id', peerId);
             tile.setAttribute('data-username', username);
             
             const video = document.createElement('video');
@@ -537,12 +662,13 @@
         function playVideo(stream, peerId) {
             activeStreams[stream.id] = { stream, peerId };
             const tile = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`);
-            
+
             if (!tile) {
-                // Get username from server (we'll use peerId for now, real username would come from server)
-                addVideoTile(stream.id, `Peer ${peerId.slice(0, 8)}`);
+                // Use peerId as identifier and label if username not available
+                const label = peerId ? `Peer ${peerId.slice(0, 8)}` : 'Peer';
+                addVideoTile(stream.id, label, false, peerId);
             }
-            
+
             const video = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`)?.querySelector('video');
             if (video) {
                 video.srcObject = stream;

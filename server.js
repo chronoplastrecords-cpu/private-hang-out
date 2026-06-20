@@ -140,8 +140,8 @@ io.on('connection', (socket) => {
 
 // Broadcast the list of users to all connected clients
 function broadcastUsersList() {
-    const usersList = Object.values(users).map(u => u.username);
-    io.emit('users-list', usersList);
+    const usersArray = Object.values(users).map(u => ({ username: u.username, peerId: u.peerId }));
+    io.emit('users-list', usersArray);
 }
 
 // Glitch uses process.env.PORT to assign dynamic ports

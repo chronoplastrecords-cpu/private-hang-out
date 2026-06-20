@@ -257,17 +257,8 @@
                 
                 const title = document.createElement('span');
                 title.className = 'playlist-item-title';
-                // Prepend platform icon
-                const icon = (function(p){
-                    switch((p||'').toLowerCase()){
-                        case 'vimeo': return '🎬 ';
-                        case 'bandcamp': return '🎵 ';
-                        case 'uguu': return '🔗 ';
-                        default: return '▶️ ';
-                    }
-                })(item.platform);
-                title.textContent = icon + (item.title || item.id || 'Unknown');
-                title.title = (item.title || item.id || 'Unknown'); // Show full title on hover
+                title.textContent = item.title;
+                title.title = item.title; // Show full title on hover
                 title.onclick = () => replayFromHistory(index);
                 
                 const deleteBtn = document.createElement('button');
@@ -317,15 +308,7 @@
 
                 const title = document.createElement('span');
                 title.className = 'playlist-item-title';
-                const icon = (function(p){
-                    switch((p||'').toLowerCase()){
-                        case 'vimeo': return '🎬 ';
-                        case 'bandcamp': return '🎵 ';
-                        case 'uguu': return '🔗 ';
-                        default: return '▶️ ';
-                    }
-                })(item.platform);
-                title.textContent = icon + (item.title || (item.id || 'Unknown'));
+                title.textContent = item.title || (item.id || 'Unknown');
                 title.title = `${item.title || item.id} — requested by ${item.requestedBy || 'Anonymous'}`;
                 title.onclick = () => replayFromQueue(index);
 
@@ -594,37 +577,25 @@
         function loadBandcamp(url) {
             destroyCurrentPlayer();
             const container = document.getElementById('player');
-            // First, try Bandcamp oEmbed to get an official embed snippet
-            const oembedUrl = `https://bandcamp.com/oembed?url=${encodeURIComponent(url)}&format=json`;
-            fetch(oembedUrl).then(r => r.json()).then(data => {
-                if (data && data.html) {
-                    container.innerHTML = data.html;
-                } else {
-                    // Fallback to iframe/link
-                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Unable to embed content.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
-                }
-            }).catch(() => {
-                // If oEmbed fails (CORS or other), try iframe then fallback to link
-                try {
-                    const iframe = document.createElement('iframe');
-                    iframe.src = url;
-                    iframe.width = '100%';
-                    iframe.height = '100%';
-                    iframe.frameBorder = '0';
-                    iframe.allow = 'autoplay; encrypted-media';
-                    container.appendChild(iframe);
+            // Try embedding the page in an iframe (may be blocked); otherwise show a clickable link
+            const iframe = document.createElement('iframe');
+            iframe.src = url;
+            iframe.width = '100%';
+            iframe.height = '100%';
+            iframe.frameBorder = '0';
+            iframe.allow = 'autoplay; encrypted-media';
+            container.appendChild(iframe);
 
-                    setTimeout(() => {
-                        try {
-                            const doc = iframe.contentDocument || iframe.contentWindow.document;
-                        } catch (e) {
-                            container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Bandcamp embedding may be blocked by the site.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
-                        }
-                    }, 800);
+            // Provide fallback link if embedding is blocked
+            setTimeout(() => {
+                try {
+                    const doc = iframe.contentDocument || iframe.contentWindow.document;
+                    // If we can access content, leave iframe as-is
                 } catch (e) {
-                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Cannot embed Bandcamp.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
+                    // Embedding blocked — show fallback
+                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Bandcamp embedding may be blocked by the site.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
                 }
-            });
+            }, 800);
         }
 
         function destroyCurrentPlayer() {

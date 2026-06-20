@@ -599,8 +599,8 @@
             destroyCurrentPlayer();
             const container = document.getElementById('player');
             // First, try Bandcamp oEmbed to get an official embed snippet
-            const oembedUrl = `https://bandcamp.com/oembed?url=${encodeURIComponent(url)}&format=json`;
-            fetch(oembedUrl).then(r => r.json()).then(data => {
+            const proxyUrl = `/oembed?url=${encodeURIComponent(url)}`;
+            fetch(proxyUrl).then(r => r.json()).then(data => {
                 if (data && data.html) {
                     container.innerHTML = data.html;
                 } else {

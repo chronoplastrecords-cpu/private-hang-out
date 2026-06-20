@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const https = require('https');
 
 // Serve frontend files from the 'Public' directory
 app.use(express.static('Public'));
@@ -143,6 +144,39 @@ function broadcastUsersList() {
     const usersArray = Object.values(users).map(u => ({ username: u.username, peerId: u.peerId }));
     io.emit('users-list', usersArray);
 }
+
+// Simple server-side oEmbed proxy for Bandcamp to avoid CORS issues
+app.get('/oembed', (req, res) => {
+    const url = req.query.url;
+    if (!url) return res.status(400).json({ error: 'missing url' });
+    const oembedUrl = `https://bandcamp.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+
+    const options = {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': 'https://bandcamp.com/'
+        }
+    };
+
+    https.get(oembedUrl, options, (resp) => {
+        let data = '';
+        resp.on('data', (chunk) => data += chunk);
+        resp.on('end', () => {
+            // Try to parse JSON first
+            try {
+                const json = JSON.parse(data);
+                res.json(json);
+                return;
+            } catch (e) {
+                // If the response wasn't JSON, return a safe fallback
+                res.status(502).json({ error: 'invalid oembed response', body: data.slice(0, 1000) });
+            }
+        });
+    }).on('error', (err) => {
+        res.status(502).json({ error: 'oembed fetch error' });
+    });
+});
 
 // Glitch uses process.env.PORT to assign dynamic ports
 const PORT = process.env.PORT || 3000;

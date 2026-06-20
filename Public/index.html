@@ -115,15 +115,7 @@
 <body>
     <div class="header">
         <div class="controls">
-            <select id="platform-select" style="padding: 8px; border-radius: 5px; border: 1px solid #444; background: #2a2a2a; color: white; cursor: pointer;">
-                <option value="youtube">YouTube</option>
-                <option value="vimeo">Vimeo</option>
-                <option value="rumble">Rumble</option>
-                <option value="bandcamp">Bandcamp</option>
-                <option value="soundcloud">SoundCloud</option>
-                <option value="uguu">uguu.se (Video/Audio)</option>
-            </select>
-            <input type="text" id="yt-input" placeholder="Enter video ID or URL...">
+            <input type="text" id="yt-input" placeholder="Enter YouTube video ID or URL...">
             <button onclick="changeVideo()">Load Video</button>
         </div>
         <button class="sidebar-toggle" onclick="toggleSidebar()">☰ Chat</button>
@@ -217,15 +209,8 @@
         }
 
         function getPlaylistTitle(platform, id) {
-            switch(platform) {
-                case 'youtube': return `YouTube: ${id.slice(0, 8)}...`;
-                case 'vimeo': return `Vimeo: ${id.slice(0, 8)}...`;
-                case 'rumble': return `Rumble: ${id.slice(0, 8)}...`;
-                case 'bandcamp': return `Bandcamp: ${id.slice(0, 30)}...`;
-                case 'soundcloud': return `SoundCloud: ${id.slice(0, 30)}...`;
-                case 'uguu': return `File: ${id.split('/').pop().slice(0, 20)}...`;
-                default: return `Media: ${id.slice(0, 8)}...`;
-            }
+            const title = id.length > 11 ? id.slice(0, 11) : id;
+            return `YouTube: ${title}...`;
         }
 
         function deleteFromHistory(index) {
@@ -243,9 +228,10 @@
             if (index < 0 || index >= playlist.length) return;
             
             const item = playlist[index];
+            const id = parseYouTubeId(item.id);
             currentPlayingIndex = index;
-            loadMedia(item.platform, item.id);
-            socket.emit('video-change', item);
+            loadMedia('youtube', id);
+            socket.emit('video-change', { platform: 'youtube', id });
             renderPlaylist();
         }
 
@@ -324,10 +310,13 @@
             });
         });
 
-        // --- 2. MULTI-PLATFORM VIDEO SYNC ---
+        // --- 2. VIDEO SYNC ---
         let player;
         let currentPlatform = 'youtube';
         let currentMediaId = 'dQw4w9WgXcQ';
+        let ytApiReady = false;
+        let pendingYouTubeId = null;
+        let playerReady = false;
 
         const tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
@@ -335,47 +324,23 @@
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
         function onYouTubeIframeAPIReady() {
-            createYouTubePlayer('dQw4w9WgXcQ');
+            ytApiReady = true;
+            if (!player) {
+                createYouTubePlayer(currentMediaId);
+            } else if (pendingYouTubeId) {
+                loadYouTubeVideo(pendingYouTubeId);
+            }
         }
 
-        function detectPlatform(input) {
-            // YouTube
-            if (input.includes('youtube.com') || input.includes('youtu.be')) {
-                const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-                const match = input.match(regExp);
-                const id = (match && match[2].length === 11) ? match[2] : input;
-                return { platform: 'youtube', id };
+        function parseYouTubeId(input) {
+            const trimmed = input.trim();
+            const idRegex = /^[a-zA-Z0-9_-]{11}$/;
+            if (idRegex.test(trimmed)) {
+                return trimmed;
             }
-            // Vimeo
-            else if (input.includes('vimeo.com')) {
-                const id = input.split('/').pop();
-                return { platform: 'vimeo', id };
-            }
-            // Rumble
-            else if (input.includes('rumble.com')) {
-                const id = input.split('/').pop().split('?')[0];
-                return { platform: 'rumble', id };
-            }
-            // Bandcamp
-            else if (input.includes('bandcamp.com')) {
-                return { platform: 'bandcamp', id: input };
-            }
-            // SoundCloud
-            else if (input.includes('soundcloud.com')) {
-                return { platform: 'soundcloud', id: input };
-            }
-            // uguu.se
-            else if (input.includes('uguu.se')) {
-                return { platform: 'uguu', id: input };
-            }
-            // YouTube ID only
-            else if (/^[a-zA-Z0-9_-]{11}$/.test(input)) {
-                return { platform: 'youtube', id: input };
-            }
-            // Generic URL - try to extract ID
-            else {
-                return { platform: 'youtube', id: input };
-            }
+
+            const match = trimmed.match(/^.*(?:youtu.be\/|youtube.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/))([^#\&\?]{11}).*/);
+            return match && match[1] ? match[1] : trimmed;
         }
 
         function createYouTubePlayer(videoId) {
@@ -386,108 +351,57 @@
                 height: '100%',
                 width: '100%',
                 videoId: videoId,
-                playerVars: { 
-                    'controls': 1,
-                    'autoplay': 1,
-                    'modestbranding': 1
+                playerVars: {
+                    controls: 1,
+                    autoplay: 0,
+                    modestbranding: 1,
+                    rel: 0
+                },
+                events: {
+                    onReady: function(event) {
+                        playerReady = true;
+                        if (pendingYouTubeId) {
+                            const pending = pendingYouTubeId;
+                            pendingYouTubeId = null;
+                            event.target.loadVideoById(pending);
+                        }
+                    },
+                    onError: function(event) {
+                        console.error('[Hangout] YouTube player error', event.data);
+                        document.getElementById('player').innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#e0e0e0;background:#000;padding:20px;text-align:center;">Unable to load YouTube video. Please check the video ID or URL and try again.</div>';
+                    }
                 }
             });
         }
 
-        function createVimeoPlayer(videoId) {
-            const playerDiv = document.getElementById('player');
-            playerDiv.innerHTML = `
-                <iframe src="https://player.vimeo.com/video/${videoId}" width="100%" height="100%" 
-                    frameborder="0" allow="autoplay; fullscreen; picture-in-picture" 
-                    allowfullscreen playsinline style="width: 100%; height: 100%;"></iframe>
-            `;
-        }
+        function loadYouTubeVideo(videoId) {
+            if (!ytApiReady) {
+                pendingYouTubeId = videoId;
+                if (!player) {
+                    createYouTubePlayer(videoId);
+                }
+                return;
+            }
 
-        function createRumblePlayer(videoId) {
-            const playerDiv = document.getElementById('player');
-            playerDiv.innerHTML = `
-                <iframe width="100%" height="100%" src="https://rumble.com/embed/${videoId}/" 
-                    frameborder="0" allowfullscreen allow="autoplay; fullscreen" style="width: 100%; height: 100%;"></iframe>
-            `;
-        }
-
-        function createBandcampPlayer(url) {
-            const playerDiv = document.getElementById('player');
-            playerDiv.innerHTML = `
-                <iframe style="width: 100%; height: 100%; border: none;" 
-                    src="https://bandcamp.com/EmbeddedPlayer/v=2/url=${encodeURIComponent(url)}/size=large/" 
-                    allowfullscreen allow="autoplay" sandbox="allow-same-origin allow-scripts allow-popups allow-forms"></iframe>
-            `;
-        }
-
-        function createSoundCloudPlayer(url) {
-            const playerDiv = document.getElementById('player');
-            playerDiv.innerHTML = `
-                <iframe width="100%" height="100%" scrolling="no" frameborder="no" allow="autoplay" 
-                    src="https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&auto_play=false&hide_related=false&show_comments=true&show_user=true&show_reposts=false&visual=true" 
-                    style="width: 100%; height: 100%;"></iframe>
-            `;
-        }
-
-        function createUguuPlayer(fileUrl) {
-            const playerDiv = document.getElementById('player');
-            const isAudio = /\.(mp3|wav|flac|ogg|aac|m4a)$/i.test(fileUrl);
-            const isVideo = /\.(mp4|webm|mkv|avi|mov)$/i.test(fileUrl);
-            
-            if (isAudio) {
-                playerDiv.innerHTML = `
-                    <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000;">
-                        <audio controls style="width: 90%; margin-bottom: 20px;">
-                            <source src="${fileUrl}" type="audio/mpeg">
-                            Your browser does not support the audio element.
-                        </audio>
-                        <p style="color: #4CAF50;">Now playing audio file</p>
-                    </div>
-                `;
-            } else if (isVideo) {
-                playerDiv.innerHTML = `
-                    <video width="100%" height="100%" style="background: #000;" controls playsinline>
-                        <source src="${fileUrl}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                `;
+            if (player && playerReady && typeof player.loadVideoById === 'function') {
+                player.loadVideoById(videoId);
             } else {
-                playerDiv.innerHTML = `
-                    <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000; color: #e0e0e0;">
-                        <p>Unsupported file type. Try .mp4, .mp3, or .webm</p>
-                    </div>
-                `;
+                createYouTubePlayer(videoId);
             }
         }
 
         function changeVideo() {
             const input = document.getElementById('yt-input').value;
-            const platform = document.getElementById('platform-select').value;
             if (!input) return;
 
             try {
-                // Extract ID from input based on selected platform
-                let id = input;
-                
-                // For URLs, try to extract the ID
-                if (input.includes('/') || input.includes('?')) {
-                    const extracted = detectPlatform(input);
-                    if (extracted.platform === platform) {
-                        id = extracted.id;
-                    } else if (extracted.id) {
-                        id = extracted.id; // Use extracted ID anyway
-                    }
-                }
-                
-                currentPlatform = platform;
+                const id = parseYouTubeId(input);
+                currentPlatform = 'youtube';
                 currentMediaId = id;
 
-                // Emit to server for sync
-                socket.emit('video-change', { platform, id });
-
-                // Load locally
-                loadMedia(platform, id);
-                console.log(`[Hangout] Loading ${platform} video: ${id}`);
+                socket.emit('video-change', { platform: 'youtube', id });
+                loadMedia('youtube', id);
+                console.log(`[Hangout] Loading YouTube video: ${id}`);
             } catch (err) {
                 console.error('[Hangout] Error loading video:', err);
                 alert('Error loading video. Check the console for details.');
@@ -495,40 +409,14 @@
         }
 
         function loadMedia(platform, id) {
-            // Auto-add to watch history
-            addToHistory(platform, id);
-            
-            switch(platform) {
-                case 'youtube':
-                    createYouTubePlayer(id);
-                    break;
-                case 'vimeo':
-                    createVimeoPlayer(id);
-                    break;
-                case 'rumble':
-                    createRumblePlayer(id);
-                    break;
-                case 'bandcamp':
-                    createBandcampPlayer(id);
-                    break;
-                case 'soundcloud':
-                    createSoundCloudPlayer(id);
-                    break;
-                case 'uguu':
-                    createUguuPlayer(id);
-                    break;
-                default:
-                    createYouTubePlayer(id);
-            }
+            const finalId = parseYouTubeId(id);
+            addToHistory('youtube', finalId);
+            loadYouTubeVideo(finalId);
         }
 
         socket.on('video-change', (data) => {
-            // Handle both old format (string) and new format (object)
-            if (typeof data === 'string') {
-                loadMedia('youtube', data);
-            } else {
-                loadMedia(data.platform, data.id);
-            }
+            const id = typeof data === 'string' ? parseYouTubeId(data) : parseYouTubeId(data.id || currentMediaId);
+            loadMedia('youtube', id);
         });
 
         // --- 3. WEB RTC VIDEO CHAT ---

@@ -235,11 +235,10 @@
             if (index < 0 || index >= playlist.length) return;
             
             const item = playlist[index];
+            const id = parseYouTubeId(item.id);
             currentPlayingIndex = index;
-            const platform = item.platform || 'youtube';
-            const idOrUrl = item.id || item.url;
-            loadMedia(platform, idOrUrl, item.url);
-            socket.emit('video-change', { platform, id: item.id, url: item.url });
+            loadMedia('youtube', id);
+            socket.emit('video-change', { platform: 'youtube', id });
             renderPlaylist();
         }
 
@@ -360,10 +359,7 @@
         function replayFromQueue(index) {
             if (index < 0 || index >= queue.length) return;
             const item = queue[index];
-            const platform = item.platform || 'youtube';
-            const idOrUrl = item.id || item.url;
-            loadMedia(platform, idOrUrl, item.url);
-            socket.emit('video-change', { platform, id: item.id, url: item.url });
+            socket.emit('video-change', { platform: item.platform || 'youtube', id: item.id });
         }
 
         // --- 1. TEXT CHAT ROUTINES ---

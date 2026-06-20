@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 
 const app = express();
@@ -8,6 +9,10 @@ const io = new Server(server);
 
 // Serve frontend files from the 'Public' directory
 app.use(express.static('Public'));
+
+// Serve local client libraries from node_modules to avoid external CDN/blocking issues
+app.use('/js/peerjs', express.static(path.join(__dirname, 'node_modules', 'peerjs', 'dist')));
+app.use('/js/socket.io', express.static(path.join(__dirname, 'node_modules', 'socket.io', 'client-dist')));
 
 let currentVideo = { platform: 'youtube', id: 'dQw4w9WgXcQ' }; // Default video
 let playlist = []; // Shared playlist for all users

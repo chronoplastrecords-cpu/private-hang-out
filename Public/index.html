@@ -599,8 +599,8 @@
             destroyCurrentPlayer();
             const container = document.getElementById('player');
             // First, try Bandcamp oEmbed to get an official embed snippet
-            const proxyUrl = `/oembed?url=${encodeURIComponent(url)}`;
-            fetch(proxyUrl).then(r => r.json()).then(data => {
+            const oembedUrl = `https://bandcamp.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+            fetch(oembedUrl).then(r => r.json()).then(data => {
                 if (data && data.html) {
                     container.innerHTML = data.html;
                 } else {
@@ -650,47 +650,29 @@
             const input = document.getElementById('yt-input').value;
             if (!input) return;
 
-            const parsed = parseInput(input);
-            currentPlatform = parsed.platform;
-            currentMediaId = parsed.id || parsed.url;
+            try {
+                const id = parseYouTubeId(input);
+                currentPlatform = 'youtube';
+                currentMediaId = id;
 
-            socket.emit('video-change', { platform: parsed.platform, id: parsed.id || parsed.url, url: parsed.url });
-            loadMedia(parsed.platform, parsed.id || parsed.url, parsed.url);
-            console.log(`[Hangout] Loading ${parsed.platform}: ${parsed.id || parsed.url}`);
+                socket.emit('video-change', { platform: 'youtube', id });
+                loadMedia('youtube', id);
+                console.log(`[Hangout] Loading YouTube video: ${id}`);
+            } catch (err) {
+                console.error('[Hangout] Error loading video:', err);
+                alert('Error loading video. Check the console for details.');
+            }
         }
 
-        function loadMedia(platform, idOrUrl, url) {
-            switch ((platform||'').toLowerCase()) {
-                case 'vimeo':
-                    addToHistory('vimeo', idOrUrl, url);
-                    loadVimeoVideo(idOrUrl);
-                    break;
-                case 'uguu':
-                    addToHistory('uguu', idOrUrl, url);
-                    loadUguuMedia(idOrUrl);
-                    break;
-                case 'bandcamp':
-                    addToHistory('bandcamp', idOrUrl, url);
-                    loadBandcamp(url || idOrUrl);
-                    break;
-                default:
-                    const finalId = idOrUrl; // YouTube id/url
-                    addToHistory('youtube', finalId, url);
-                    loadYouTubeVideo(finalId);
-                    break;
-            }
+        function loadMedia(platform, id) {
+            const finalId = parseYouTubeId(id);
+            addToHistory('youtube', finalId);
+            loadYouTubeVideo(finalId);
         }
 
         socket.on('video-change', (data) => {
-            if (!data) return;
-            if (typeof data === 'string') {
-                const parsed = parseInput(data);
-                loadMedia(parsed.platform, parsed.id || parsed.url, parsed.url);
-                return;
-            }
-            const platform = data.platform || 'youtube';
-            const id = data.id || data.url || currentMediaId;
-            loadMedia(platform, id, data.url);
+            const id = typeof data === 'string' ? parseYouTubeId(data) : parseYouTubeId(data.id || currentMediaId);
+            loadMedia('youtube', id);
         });
 
         // --- 3. WEB RTC VIDEO CHAT ---

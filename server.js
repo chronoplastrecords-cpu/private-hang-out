@@ -16,6 +16,7 @@ app.use('/js/socket.io', express.static(path.join(__dirname, 'node_modules', 'so
 
 let currentVideo = { platform: 'youtube', id: 'dQw4w9WgXcQ' }; // Default video
 let playlist = []; // Shared playlist for all users
+let queue = []; // Shared video queue
 let users = {}; // Track users: { socketId: { username, peerId } }
 let speakingUsers = new Set(); // Track who's currently speaking
 
@@ -31,6 +32,8 @@ io.on('connection', (socket) => {
 
     // Send the current playlist to the new user
     socket.emit('playlist-update', playlist);
+    // Send the current queue to the new user
+    socket.emit('queue-update', queue);
 
     // Handle Peer ID registration (for WebRTC)
     socket.on('register-peer', (peerId) => {
@@ -65,7 +68,49 @@ io.on('connection', (socket) => {
         } else {
             currentVideo = videoData;
         }
+        // If the current video matches the front of the queue, remove it
+        if (queue.length > 0 && queue[0].platform === currentVideo.platform && queue[0].id === currentVideo.id) {
+            queue.shift();
+            io.emit('queue-update', queue);
+        }
         io.emit('video-change', currentVideo); 
+    });
+
+    // Queue management: add / remove / move / request-next
+    socket.on('queue-add', (item) => {
+        // item: { platform, id, title, requestedBy }
+        if (item && item.id) {
+            queue.push(item);
+            io.emit('queue-update', queue);
+            console.log(`Queue added by ${socket.id}: ${item.platform}:${item.id}`);
+        }
+    });
+
+    socket.on('queue-remove', (index) => {
+        if (typeof index === 'number' && index >= 0 && index < queue.length) {
+            queue.splice(index, 1);
+            io.emit('queue-update', queue);
+            console.log(`Queue item removed by ${socket.id} at index ${index}`);
+        }
+    });
+
+    socket.on('queue-move', ({ from, to }) => {
+        if (typeof from === 'number' && typeof to === 'number' && from >= 0 && from < queue.length && to >= 0 && to < queue.length) {
+            const [item] = queue.splice(from, 1);
+            queue.splice(to, 0, item);
+            io.emit('queue-update', queue);
+            console.log(`Queue item moved by ${socket.id} from ${from} to ${to}`);
+        }
+    });
+
+    socket.on('request-next', () => {
+        if (queue.length > 0) {
+            const next = queue.shift();
+            currentVideo = { platform: next.platform || 'youtube', id: next.id };
+            io.emit('queue-update', queue);
+            io.emit('video-change', currentVideo);
+            console.log(`Advancing to next queue item: ${currentVideo.platform}:${currentVideo.id}`);
+        }
     });
 
     // Handle Playlist Updates

@@ -691,37 +691,53 @@
         function loadBandcamp(url) {
             destroyCurrentPlayer();
             const container = document.getElementById('player');
-            // First, try Bandcamp oEmbed to get an official embed snippet
+            // First, try Bandcamp oEmbed to get an official embed snippet via server proxy
             const proxyUrl = `/oembed?url=${encodeURIComponent(url)}`;
-            fetch(proxyUrl).then(r => r.json()).then(data => {
+            fetch(proxyUrl).then(r => {
+                if (!r.ok) throw new Error('oembed fetch failed');
+                return r.json();
+            }).then(data => {
                 if (data && data.html) {
-                    container.innerHTML = data.html;
+                    // Use an iframe with srcdoc + base href so relative assets in the oEmbed HTML resolve
+                    try {
+                        const iframe = document.createElement('iframe');
+                        iframe.width = '100%';
+                        iframe.height = '100%';
+                        iframe.frameBorder = '0';
+                        iframe.allow = 'autoplay; encrypted-media; fullscreen';
+                        // Build a small wrapper that sets <base> so relative urls resolve to the original Bandcamp page
+                        const base = `<base href="${escapeHtml(url)}">`;
+                        const srcdoc = base + (data.html || '');
+                        iframe.srcdoc = srcdoc;
+                        // Fallback: if browser doesn't support srcdoc, write into iframe after append
+                        container.appendChild(iframe);
+                        setTimeout(() => {
+                            try {
+                                // If srcdoc isn't applied, try writing into the iframe document
+                                const idoc = iframe.contentDocument || iframe.contentWindow.document;
+                                if (idoc && (!idoc.body || idoc.body.innerHTML.trim() === '')) {
+                                    idoc.open(); idoc.write(srcdoc); idoc.close();
+                                }
+                            } catch (e) {
+                                // ignore cross-origin issues — fallback will be shown below
+                            }
+                        }, 50);
+                    } catch (e) {
+                        container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Unable to embed content.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
+                    }
                 } else {
-                    // Fallback to iframe/link
+                    // No html returned — show link fallback
                     container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Unable to embed content.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
                 }
             }).catch(() => {
-                // If oEmbed fails (CORS or other), try iframe then fallback to link
-                try {
-                    const iframe = document.createElement('iframe');
-                    iframe.src = url;
-                    iframe.width = '100%';
-                    iframe.height = '100%';
-                    iframe.frameBorder = '0';
-                    iframe.allow = 'autoplay; encrypted-media';
-                    container.appendChild(iframe);
-
-                    setTimeout(() => {
-                        try {
-                            const doc = iframe.contentDocument || iframe.contentWindow.document;
-                        } catch (e) {
-                            container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Bandcamp embedding may be blocked by the site.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
-                        }
-                    }, 800);
-                } catch (e) {
-                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Cannot embed Bandcamp.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
-                }
+                // If oEmbed fails (CORS or other), show a friendly fallback link
+                container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Cannot embed Bandcamp.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
             });
+        }
+
+        // Simple HTML escaper for use in srcdoc/base construction
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
         function destroyCurrentPlayer() {

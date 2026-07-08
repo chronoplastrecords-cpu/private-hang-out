@@ -35,12 +35,33 @@ function buildBandcampOEmbedUrl(sourceUrl) {
 }
 
 async function fetchBandcampOEmbed(sourceUrl) {
-    const embedUrl = buildBandcampOEmbedUrl(sourceUrl);
-    const response = await fetch(embedUrl);
-    if (!response.ok) {
-        throw new Error(`Bandcamp oEmbed failed with ${response.status}`);
+    // Try canonical oEmbed endpoint first
+    let embedUrl = buildBandcampOEmbedUrl(sourceUrl).toString();
+    let response = await fetch(embedUrl, { redirect: 'follow' });
+    if (response.ok) {
+        return response.json();
     }
-    return response.json();
+
+    // If the canonical oEmbed failed, try fetching the page and look for a rel="alternate" oEmbed link
+    try {
+        const pageResp = await fetch(sourceUrl, { redirect: 'follow' });
+        if (pageResp.ok) {
+            const html = await pageResp.text();
+            const match = html.match(/<link[^>]+rel=["']alternate["'][^>]+type=["']application\/(?:json\+oembed|oembed\+json)["'][^>]*>/i);
+            if (match) {
+                const hrefMatch = match[0].match(/href=["']([^"']+)["']/i);
+                if (hrefMatch && hrefMatch[1]) {
+                    const resolved = hrefMatch[1].startsWith('http') ? hrefMatch[1] : (new URL(hrefMatch[1], sourceUrl)).toString();
+                    response = await fetch(resolved, { redirect: 'follow' });
+                    if (response.ok) return response.json();
+                }
+            }
+        }
+    } catch (e) {
+        // ignore and fall through to error
+    }
+
+    throw new Error(`Bandcamp oEmbed failed (attempted ${embedUrl})`);
 }
 
 // Serve frontend files from the 'Public' directory

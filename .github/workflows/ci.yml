@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install dependencies
+        run: npm ci
+      - name: Start server
+        run: |
+          nohup node server.js > server.log 2>&1 &
+          echo $! > server.pid
+      - name: Wait for server
+        run: |
+          for i in {1..10}; do
+            if curl -fsS http://localhost:3000/health; then
+              echo 'Server healthy'
+              exit 0
+            fi
+            echo 'Waiting for server...'
+            sleep 1
+          done
+          cat server.log || true
+          exit 1
+      - name: Run basic smoke curl
+        run: curl -fsS http://localhost:3000/health

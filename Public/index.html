@@ -50,7 +50,7 @@
         .voice-box { padding: 10px; background: #2a2a2a; border-radius: 5px; border: 1px solid #444; }
         .voice-box h3 { margin: 0 0 8px 0; font-size: 0.95rem; }
         .voice-box p { margin: 5px 0; font-size: 0.85rem; }
-        #my-id { font-weight: bold; color: #4CAF50; background: #111; padding: 2px 6px; border-radius: 3px; font-size: 0.75rem; }
+        #room-id, #peer-id { font-weight: bold; color: #4CAF50; background: #111; padding: 2px 6px; border-radius: 3px; font-size: 0.75rem; }
         .voice-box input { width: 100%; padding: 8px; border-radius: 3px; border: 1px solid #444; background: #1a1a1a; color: white; margin-bottom: 8px; }
         .voice-box button { width: 100%; }
 
@@ -110,9 +110,36 @@
         .playlist-item-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .playlist-item-delete { background: #ff6b6b; border: none; color: white; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 0.7rem; }
         .playlist-item-delete:hover { background: #ff5252; }
+        /* Participants strip below video */
+        .participants-strip { display:flex; gap:10px; padding: 10px; background: transparent; align-items:flex-start; overflow-x:auto; flex-wrap:wrap; max-height:240px; overflow-y:auto; }
+        .participant-tile { display:flex; flex-direction:column; align-items:center; width:84px; color:#e0e0e0; font-size:0.8rem; flex:0 0 84px; }
+        .participant-avatar { width:56px; height:56px; border-radius:50%; border:2px solid #222; background:#222; object-fit:cover; }
+        .participant-name { margin-top:6px; max-width:80px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .participant-owner { color:#FFD54F; font-weight:700; font-size:0.7rem; margin-left:4px; }
+
+        @media (max-width: 720px) {
+            .participants-strip { gap:8px; padding:8px; max-height:200px; }
+            .participant-tile { width:72px; flex:0 0 72px; }
+            .participant-avatar { width:48px; height:48px; }
+            .participant-name { max-width:68px; font-size:0.75rem; }
+        }
+        /* Toast */
+        #toast { position: fixed; top: 18px; right: 18px; background: #323232; color: #fff; padding: 10px 14px; border-radius: 6px; opacity: 0; transition: opacity 180ms ease-in-out; z-index: 200; }
     </style>
 </head>
 <body>
+    <div id="login-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;z-index:60;">
+        <div style="background:#111;padding:20px;border-radius:8px;width:320px;color:#e0e0e0;">
+            <h2 style="margin-top:0;margin-bottom:8px;color:#4CAF50;">Join a Hangout</h2>
+            <label style="font-size:0.9rem;display:block;margin-bottom:6px;">Display name</label>
+            <input id="overlay-username" style="width:100%;padding:8px;margin-bottom:8px;border-radius:4px;border:1px solid #333;background:#0b0b0b;color:#e0e0e0;" placeholder="Your name">
+            <label style="font-size:0.9rem;display:block;margin-bottom:6px;">Room ID (or create one)</label>
+            <div style="display:flex;gap:8px;margin-bottom:8px;"><input id="overlay-room" style="flex:1;padding:8px;border-radius:4px;border:1px solid #333;background:#0b0b0b;color:#e0e0e0;" placeholder="your-room-id"><button onclick="createRoomFromInput()" style="background:#2196F3;padding:8px;border-radius:4px;border:none;">Create</button></div>
+            <div style="display:flex;gap:8px;"><button onclick="joinExistingRoom(false)" style="flex:1;background:#4CAF50;padding:8px;border-radius:4px;border:none;">Join Room</button><button onclick="joinExistingRoom(true)" style="flex:1;background:#607D8B;padding:8px;border-radius:4px;border:none;">Join as Guest</button></div>
+            <div id="overlay-error" style="height:18px;margin-top:8px;color:#ff8a80;font-size:0.85rem;"></div>
+            <p id="overlay-note" style="margin-top:6px;color:#9e9e9e;font-size:0.85rem;">Create a short ID to invite friends or paste a link you received.</p>
+        </div>
+    </div>
     <div class="header">
         <div class="controls">
             <input type="text" id="yt-input" placeholder="Enter YouTube/Vimeo/Bandcamp/Uguu URL or ID...">
@@ -122,9 +149,12 @@
         <button class="sidebar-toggle" onclick="toggleSidebar()">☰ Chat</button>
     </div>
 
+    <div id="toast"></div>
+
     <div class="main-container">
         <div class="video-section">
             <div id="player"></div>
+            <div id="participants-strip" class="participants-strip" aria-label="Participants"></div>
             <div class="video-chat-section">
                 <h4>Video Participants</h4>
                 <div id="video-container"></div>
@@ -133,22 +163,26 @@
 
         <div class="sidebar">
             <div class="sidebar-content">
-                <div class="username-box">
-                    <h3>Your Name</h3>
-                    <input type="text" id="username-input" placeholder="Enter your name...">
-                    <button onclick="setUsername()">Set Name</button>
-                </div>
+                        <div class="username-box">
+                            <h3>Your Name</h3>
+                            <input type="text" id="username-input" placeholder="Enter your name...">
+                            <button onclick="setUsername()">Set Name</button>
 
-                <div class="voice-box">
-                    <h3>Media Setup</h3>
-                    <p>Join with audio, video, or text-only.</p>
-                    <button onclick="requestMediaAccess('audio')">Join Audio</button>
-                    <button onclick="requestMediaAccess('video')" style="margin-top: 6px;">Join Video</button>
-                    <button onclick="requestMediaAccess('audio-video')" style="margin-top: 6px;">Join Audio + Video</button>
-                    <button onclick="requestMediaAccess('none')" style="margin-top: 6px; background: #607D8B;">Text Only</button>
-                    <p id="media-status" style="margin-top: 8px; color: #4CAF50; font-size: 0.8rem;">Connecting to room audio…</p>
-                    <p style="margin-top: 6px; font-size: 0.75rem;">Your room ID: <span id="my-id">Connecting…</span></p>
-                </div>
+                            <div style="margin-top:10px;">
+                                <h3 style="margin:10px 0 6px 0;">Media Setup</h3>
+                                <p style="margin:4px 0 8px 0;">Join with audio, video, or text-only.</p>
+                                <button onclick="requestMediaAccess('audio')">Join Audio</button>
+                                <button onclick="requestMediaAccess('video')" style="margin-top: 6px;">Join Video</button>
+                                <button onclick="requestMediaAccess('audio-video')" style="margin-top: 6px;">Join Audio + Video</button>
+                                <button onclick="requestMediaAccess('none')" style="margin-top: 6px; background: #607D8B;">Text Only</button>
+                                <p id="media-status" style="margin-top: 8px; color: #4CAF50; font-size: 0.8rem;">Choose a media option to join.</p>
+                                <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+                                    <div style="font-size:0.75rem;color:#e0e0e0;">Room ID: <span id="room-id">—</span></div>
+                                    <button onclick="copyInvite()" style="background:#2196F3;padding:6px;border-radius:4px;border:none;color:white;font-size:0.8rem;">Copy Invite</button>
+                                </div>
+                                <p style="margin-top: 2px; font-size: 0.65rem; color:#9e9e9e;">Peer ID: <span id="peer-id">—</span></p>
+                            </div>
+                        </div>
 
                 <div style="flex: 1; display: flex; flex-direction: column; min-height: 200px;">
                     <h3 style="margin: 0 0 8px 0; font-size: 0.95rem;">Text Chat</h3>
@@ -185,6 +219,7 @@
             reconnectionDelay: 1000
         });
         let myUsername = 'Anonymous';
+        let currentRoomId = null;
         let playlist = [];
         let currentPlayingIndex = -1;
         let queue = [];
@@ -200,9 +235,66 @@
             const input = document.getElementById('username-input');
             if(input.value.trim() !== '') {
                 myUsername = input.value.trim();
-                socket.emit('set-username', myUsername);
+                if (currentRoomId) socket.emit('set-username', myUsername);
                 input.value = '';
+                document.getElementById('overlay-username').value = '';
+                updateMediaStatus('Name set: ' + myUsername);
             }
+        }
+
+        function generateRoomId(len = 6) {
+            const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+            let out = '';
+            for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+            return 'r-' + out;
+        }
+
+        function createRoomFromInput() {
+            const roomInput = document.getElementById('overlay-room');
+            const id = (roomInput && roomInput.value.trim()) || '';
+            if (!id) {
+                const err = document.getElementById('overlay-error'); if (err) err.innerText = 'Please enter a room ID to create.'; return;
+            }
+            const nameField = document.getElementById('overlay-username');
+            let name = (nameField && nameField.value.trim()) || '';
+            if (!name) name = 'Host' + Math.floor(Math.random() * 10000);
+
+            currentRoomId = id;
+            myUsername = name;
+            try { window.history.replaceState({}, '', '?room=' + encodeURIComponent(id)); } catch (e) {}
+
+            socket.emit('join-room', { roomId: id, username: name, owner: true });
+            if (myPeerId) socket.emit('register-peer', myPeerId);
+            document.getElementById('room-id').innerText = id;
+            hideOverlay();
+            updateMediaStatus('Created and joined room: ' + id);
+        }
+
+        function joinExistingRoom(asGuest = false) {
+            const roomInput = document.getElementById('overlay-room');
+            let room = (roomInput && roomInput.value.trim()) || '';
+            if (!room) { const err = document.getElementById('overlay-error'); if (err) err.innerText = 'Please enter the room ID to join.'; return; }
+            const nameField = document.getElementById('overlay-username');
+            let name = (nameField && nameField.value.trim()) || '';
+            if (!name && !asGuest) { const err = document.getElementById('overlay-error'); if (err) err.innerText = 'Please enter a display name or choose Join as Guest.'; return; }
+            if (!name) name = 'Guest' + Math.floor(Math.random() * 10000);
+
+            currentRoomId = room;
+            myUsername = name;
+            try { window.history.replaceState({}, '', '?room=' + encodeURIComponent(room)); } catch (e) {}
+
+            socket.emit('join-room', { roomId: room, username: name, owner: false });
+            if (myPeerId) socket.emit('register-peer', myPeerId);
+            socket.emit('set-username', myUsername);
+            document.getElementById('room-id').innerText = room;
+            hideOverlay();
+            updateMediaStatus('Joined room: ' + room);
+        }
+
+        function hideOverlay() {
+            const ov = document.getElementById('login-overlay');
+            if (ov) ov.style.display = 'none';
+            const err = document.getElementById('overlay-error'); if (err) err.innerText = '';
         }
 
         // --- 0b. WATCH HISTORY MANAGEMENT ---
@@ -889,7 +981,8 @@
 
         peer.on('open', (id) => {
             myPeerId = id;
-            document.getElementById('my-id').innerText = id;
+            const pid = document.getElementById('peer-id');
+            if (pid) pid.innerText = id;
             socket.emit('register-peer', id); // Register peer ID with server
             sendMediaState();
             ensureLocalTile();
@@ -948,11 +1041,48 @@
                 profileImg.src = generateProfilePicture(username);
                 profileImg.style = 'width: 24px; height: 24px; border-radius: 50%; margin-right: 8px; vertical-align: middle;';
                 userItem.appendChild(profileImg);
-                const statusText = document.createTextNode(`${username}${peerId && peerId === currentUserId ? ' (you)' : ''}`);
+                const isYou = peerId && peerId === currentUserId;
+                const ownerTag = u.owner ? ' (owner)' : '';
+                const statusText = document.createTextNode(`${username}${isYou ? ' (you)' : ''}${ownerTag}`);
                 userItem.appendChild(statusText);
                 userList.appendChild(userItem);
 
                 if (peerId) peerIdsNow.add(peerId);
+            });
+
+            // Render participants strip under the video
+            const participantsStrip = document.getElementById('participants-strip');
+            if (participantsStrip) participantsStrip.innerHTML = '';
+
+            users.forEach(u => {
+                const username = u.username || 'Anonymous';
+                const peerId = u.peerId || null;
+
+                if (participantsStrip) {
+                    const tile = document.createElement('div');
+                    tile.className = 'participant-tile';
+
+                    const img = document.createElement('img');
+                    img.className = 'participant-avatar';
+                    img.src = generateProfilePicture(username);
+                    img.alt = username;
+                    tile.appendChild(img);
+
+                    const nameDiv = document.createElement('div');
+                    nameDiv.className = 'participant-name';
+                    const isYou = peerId && peerId === currentUserId;
+                    nameDiv.textContent = `${username}${isYou ? ' (you)' : ''}`;
+                    tile.appendChild(nameDiv);
+
+                    if (u.owner) {
+                        const ownerBadge = document.createElement('div');
+                        ownerBadge.className = 'participant-owner';
+                        ownerBadge.textContent = 'OWNER';
+                        tile.appendChild(ownerBadge);
+                    }
+
+                    participantsStrip.appendChild(tile);
+                }
             });
 
             const videoContainer = document.getElementById('video-container');
@@ -969,6 +1099,50 @@
         });
 
         updateMediaStatus('Choose an option above to join with audio, video, or text-only.');
+
+        // Prefill room from URL if present
+        (function prefillFromUrl(){
+            try{
+                const params = new URLSearchParams(window.location.search);
+                const r = params.get('room');
+                if (r) {
+                    const or = document.getElementById('overlay-room');
+                    if (or) or.value = r;
+                }
+            }catch(e){}
+        })();
+
+        function copyInvite() {
+            if (!currentRoomId) {
+                showToast('No room to copy.');
+                return;
+            }
+            const url = window.location.origin + window.location.pathname + '?room=' + encodeURIComponent(currentRoomId);
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(url).then(() => {
+                    showToast('Invite link copied to clipboard');
+                }).catch(() => {
+                    showToast('Unable to copy to clipboard');
+                });
+            } else {
+                // Fallback
+                const tmp = document.createElement('textarea');
+                tmp.value = url;
+                document.body.appendChild(tmp);
+                tmp.select();
+                try { document.execCommand('copy'); showToast('Invite link copied to clipboard'); } catch (e) { showToast('Unable to copy invite link'); }
+                tmp.remove();
+            }
+        }
+
+        // Simple toast
+        function showToast(msg, timeout = 2500) {
+            const t = document.getElementById('toast');
+            if (!t) return updateMediaStatus(msg);
+            t.innerText = msg;
+            t.style.opacity = '1';
+            setTimeout(() => { t.style.opacity = '0'; }, timeout);
+        }
     </script>
 </body>
 </html>

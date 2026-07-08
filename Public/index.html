@@ -57,8 +57,11 @@
         .user-list { padding: 10px; background: #1a1a1a; border-radius: 5px; border: 1px solid #444; }
         .user-list h4 { margin: 0 0 8px 0; color: #4CAF50; font-size: 0.85rem; }
         #user-list { max-height: 100px; overflow-y: auto; }
-        .user-item { padding: 5px; font-size: 0.8rem; color: #b0b0b0; border-left: 2px solid #4CAF50; padding-left: 8px; margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
+        .user-item { padding: 5px; font-size: 0.8rem; color: #f5f5f5; border-left: 2px solid #ffffff; padding-left: 8px; margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
         .user-item img { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; }
+        .user-item.owner { color: #ff6b6b; border-left-color: #ff6b6b; }
+        .user-item.mod { color: #4CAF50; border-left-color: #4CAF50; }
+        .user-item.regular { color: #f5f5f5; border-left-color: #ffffff; }
 
         #chat-box { flex: 1; overflow-y: auto; padding: 10px; background: #0b0b0b; border-radius: 5px; border: 1px solid #333; margin-bottom: 8px; }
         .chat-msg { margin-bottom: 8px; font-size: 0.85rem; line-height: 1.4; }
@@ -115,8 +118,13 @@
         .participant-tile { display:flex; flex-direction:column; align-items:center; width:84px; color:#e0e0e0; font-size:0.8rem; flex:0 0 84px; }
         .participant-tile.participant-speaking .participant-avatar { box-shadow: 0 0 12px rgba(76,175,80,0.95); transform: scale(1.05); }
         .participant-avatar { width:56px; height:56px; border-radius:50%; border:2px solid #222; background:#222; object-fit:cover; }
-        .participant-name { margin-top:6px; max-width:80px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .participant-owner { color:#FFD54F; font-weight:700; font-size:0.7rem; margin-left:4px; }
+        .participant-name { margin-top:6px; max-width:80px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#f5f5f5; }
+        .participant-owner { color:#ff6b6b; font-weight:700; font-size:0.7rem; margin-left:4px; }
+        .participant-tile.owner .participant-name { color:#ff6b6b; }
+        .participant-tile.mod .participant-name { color:#4CAF50; }
+        .participant-tile.regular .participant-name { color:#f5f5f5; }
+        .participant-tile.owner .participant-owner { color:#ff6b6b; }
+        .participant-tile.mod .participant-owner { color:#4CAF50; }
 
         @media (max-width: 720px) {
             .participants-strip { gap:8px; padding:8px; max-height:200px; }
@@ -245,11 +253,19 @@
         let playlist = [];
         let currentPlayingIndex = -1;
         let queue = [];
+        let roomMembers = [];
 
         // Toggle sidebar on mobile
         function toggleSidebar() {
             const sidebar = document.querySelector('.sidebar');
             sidebar.classList.toggle('hidden-sidebar');
+        }
+
+        function getMyRoomRole() {
+            const currentUserId = myPeerId;
+            const me = roomMembers.find((u) => u.peerId && u.peerId === currentUserId);
+            if (!me) return { isOwner: false, isMod: false };
+            return { isOwner: !!me.owner, isMod: !!me.isMod };
         }
 
         // --- 0. USERNAME MANAGEMENT ---
@@ -791,7 +807,6 @@
         let audioContexts = {}; // Track audio analysis for speaker detection
         let connectedPeerIds = new Set();
         let userNamesByPeerId = {};
-        let roomMembers = [];
         let mediaSetupInProgress = false;
 
         // Generate a profile picture based on username
@@ -1082,7 +1097,7 @@
                 userNamesByPeerId[peerId] = username;
 
                 const userItem = document.createElement('div');
-                userItem.className = 'user-item';
+                userItem.className = 'user-item' + (u.owner ? ' owner' : (u.isMod ? ' mod' : ' regular'));
                 const profileImg = document.createElement('img');
                 profileImg.src = u.avatar ? u.avatar : generateProfilePicture(username);
                 profileImg.style = 'width: 24px; height: 24px; border-radius: 50%; margin-right: 8px; vertical-align: middle;';
@@ -1091,9 +1106,14 @@
                 const ownerTag = u.owner ? ' (owner)' : '';
                 const statusText = document.createTextNode(`${username}${isYou ? ' (you)' : ''}${ownerTag}`);
                 userItem.appendChild(statusText);
-                if (u.isMod) {
+                if (u.owner) {
+                    const ownerBadge = document.createElement('div');
+                    ownerBadge.style = 'margin-left:auto;background:#ff6b6b;color:white;padding:2px 6px;border-radius:4px;font-size:0.7rem;';
+                    ownerBadge.textContent = 'OWNER';
+                    userItem.appendChild(ownerBadge);
+                } else if (u.isMod) {
                     const modTag = document.createElement('div');
-                    modTag.style = 'margin-left:auto;background:#4D7CFF;color:white;padding:2px 6px;border-radius:4px;font-size:0.7rem;';
+                    modTag.style = 'margin-left:auto;background:#4CAF50;color:white;padding:2px 6px;border-radius:4px;font-size:0.7rem;';
                     modTag.textContent = 'MOD';
                     userItem.appendChild(modTag);
                 }
@@ -1112,7 +1132,7 @@
 
                 if (participantsStrip) {
                     const tile = document.createElement('div');
-                    tile.className = 'participant-tile';
+                    tile.className = 'participant-tile' + (u.owner ? ' owner' : (u.isMod ? ' mod' : ' regular'));
 
                     const img = document.createElement('img');
                     img.className = 'participant-avatar';
@@ -1137,11 +1157,10 @@
                         ownerBadge.className = 'participant-owner';
                         ownerBadge.textContent = 'OWNER';
                         tile.appendChild(ownerBadge);
-                    }
-                    if (u.isMod) {
+                    } else if (u.isMod) {
                         const modBadge = document.createElement('div');
                         modBadge.className = 'participant-owner';
-                        modBadge.style.color = '#4D7CFF';
+                        modBadge.style.color = '#4CAF50';
                         modBadge.textContent = 'MOD';
                         tile.appendChild(modBadge);
                     }
@@ -1156,12 +1175,8 @@
                                     const targetIsOwner = tile.getAttribute('data-owner') === '1';
                                     const targetAudio = tile.getAttribute('data-audio') === '1';
                                     const isYou = peerId && peerId === currentUserId;
-                                    const isModerator = (function(){
-                                        // Determine if local user is owner or mod by checking participants strip
-                                        const myTile = document.querySelector(`.participant-tile[data-peer-id="${currentUserId}"]`);
-                                        if (!myTile) return false;
-                                        return myTile.getAttribute('data-owner') === '1' || myTile.getAttribute('data-is-mod') === '1';
-                                    })();
+                                    const myRole = getMyRoomRole();
+                                    const isModerator = myRole.isOwner || myRole.isMod;
                                     showParticipantMenu(ev.clientX, ev.clientY, peerId, username, isYou, isModerator, socketId, targetIsMod, targetIsOwner, targetAudio);
                                     return false;
                                 });
@@ -1192,11 +1207,12 @@
             pcm.style.top = (y + 6) + 'px';
             pcm.style.display = 'block';
             // adjust options visibility
+            const isOwner = !!(roomMembers.find((u) => u.peerId && u.peerId === myPeerId)?.owner);
             document.getElementById('pcm-edit-name').style.display = isYou ? 'block' : 'none';
             document.getElementById('pcm-toggle-mute').style.display = isYou ? 'block' : 'none';
             document.getElementById('pcm-mute-target').style.display = isModerator && !isYou ? 'block' : 'none';
             document.getElementById('pcm-kick').style.display = isModerator && !targetIsOwner ? 'block' : 'none';
-            document.getElementById('pcm-set-mod').style.display = isModerator && !isYou ? 'block' : 'none';
+            document.getElementById('pcm-set-mod').style.display = isOwner && !isYou && !targetIsOwner ? 'block' : 'none';
             document.getElementById('pcm-copy-id').style.display = peerId ? 'block' : 'none';
             // Update set-mod label
             const setModEl = document.getElementById('pcm-set-mod');

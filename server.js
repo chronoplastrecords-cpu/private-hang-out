@@ -106,7 +106,7 @@ loadRooms();
 io.on('connection', (socket) => {
     console.info('User connected:', socket.id);
     // Set default username and media state; room will be set when user joins
-    users[socket.id] = { username: 'Anonymous', peerId: null, mediaState: { audio: false, video: false }, room: null };
+    users[socket.id] = { username: 'Anonymous', peerId: null, mediaState: { audio: false, video: false }, room: null, isMod: false };
 
     // Handle Peer ID registration (for WebRTC)
     socket.on('register-peer', (peerId) => {
@@ -263,6 +263,90 @@ io.on('connection', (socket) => {
         console.debug(`User ${socket.id} set username to: ${username}`);
     });
 
+    // Permission helper
+    function isOwnerOrMod(socket) {
+        const roomId = users[socket.id]?.room;
+        if (!roomId || !rooms[roomId]) return false;
+        if (rooms[roomId].ownerId === socket.id) return true;
+        return !!users[socket.id]?.isMod;
+    }
+
+    // Kick a user from the room (owner or mods)
+    socket.on('kick-user', ({ targetSocketId }) => {
+        try {
+            if (!isOwnerOrMod(socket)) {
+                socket.emit('action-error', 'Not authorized to kick users');
+                return;
+            }
+            const roomId = users[socket.id]?.room;
+            if (!roomId || !rooms[roomId]) return;
+            if (!targetSocketId || !rooms[roomId].users[targetSocketId]) return;
+            // Prevent kicking the owner
+            if (rooms[roomId].ownerId === targetSocketId) {
+                socket.emit('action-error', 'Cannot kick the room owner');
+                return;
+            }
+            // Notify target
+            const targetSocket = io.sockets.sockets.get(targetSocketId);
+            if (targetSocket) {
+                targetSocket.emit('kicked', { reason: `You were kicked from room ${roomId}` });
+                targetSocket.leave(roomId);
+            }
+            // Remove from room state
+            delete rooms[roomId].users[targetSocketId];
+            if (users[targetSocketId]) users[targetSocketId].room = null;
+            broadcastUsersList(roomId);
+            console.info(`User ${targetSocketId} was kicked from ${roomId} by ${socket.id}`);
+        } catch (e) {
+            console.warn('kick-user failed', e.message);
+        }
+    });
+
+    // Owner can assign or remove moderators
+    socket.on('set-mod', ({ targetSocketId, makeMod }) => {
+        try {
+            const roomId = users[socket.id]?.room;
+            if (!roomId || !rooms[roomId]) return;
+            if (rooms[roomId].ownerId !== socket.id) {
+                socket.emit('action-error', 'Only the room owner can set moderators');
+                return;
+            }
+            if (!targetSocketId || !rooms[roomId].users[targetSocketId]) return;
+            users[targetSocketId].isMod = !!makeMod;
+            rooms[roomId].users[targetSocketId] = users[targetSocketId];
+            broadcastUsersList(roomId);
+            console.info(`User ${targetSocketId} mod set=${!!makeMod} by owner ${socket.id}`);
+        } catch (e) {
+            console.warn('set-mod failed', e.message);
+        }
+    });
+
+    // Force mute/unmute a user (owner or mods)
+    socket.on('force-mute', ({ targetSocketId, mute }) => {
+        try {
+            if (!isOwnerOrMod(socket)) {
+                socket.emit('action-error', 'Not authorized to mute users');
+                return;
+            }
+            const roomId = users[socket.id]?.room;
+            if (!roomId || !rooms[roomId]) return;
+            if (!targetSocketId || !rooms[roomId].users[targetSocketId]) return;
+            // Update server state
+            if (users[targetSocketId]) {
+                users[targetSocketId].mediaState = users[targetSocketId].mediaState || { audio: false, video: false };
+                users[targetSocketId].mediaState.audio = !mute ? true : false;
+                rooms[roomId].users[targetSocketId] = users[targetSocketId];
+            }
+            // Notify target to apply mute/unmute locally
+            const targetSocket = io.sockets.sockets.get(targetSocketId);
+            if (targetSocket) targetSocket.emit('force-mute', { mute: !!mute });
+            broadcastUsersList(roomId);
+            console.info(`User ${targetSocketId} was ${mute ? 'muted' : 'unmuted'} by ${socket.id}`);
+        } catch (e) {
+            console.warn('force-mute failed', e.message);
+        }
+    });
+
     // Handle media state changes for audio/video join flow
     socket.on('set-media-state', (mediaState) => {
         if (users[socket.id]) {
@@ -415,6 +499,7 @@ function broadcastUsersList(roomId) {
         peerId: u.peerId,
         mediaState: u.mediaState || { audio: false, video: false },
         owner: room.ownerId === socketId,
+        isMod: !!u.isMod,
         avatar: u.avatar || null
     }));
     io.to(roomId).emit('users-list', usersArray);

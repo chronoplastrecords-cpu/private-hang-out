@@ -113,6 +113,7 @@
         /* Participants strip below video */
         .participants-strip { display:flex; gap:10px; padding: 10px; background: transparent; align-items:flex-start; overflow-x:auto; flex-wrap:wrap; max-height:240px; overflow-y:auto; }
         .participant-tile { display:flex; flex-direction:column; align-items:center; width:84px; color:#e0e0e0; font-size:0.8rem; flex:0 0 84px; }
+        .participant-tile.participant-speaking .participant-avatar { box-shadow: 0 0 12px rgba(76,175,80,0.95); transform: scale(1.05); }
         .participant-avatar { width:56px; height:56px; border-radius:50%; border:2px solid #222; background:#222; object-fit:cover; }
         .participant-name { margin-top:6px; max-width:80px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .participant-owner { color:#FFD54F; font-weight:700; font-size:0.7rem; margin-left:4px; }
@@ -139,6 +140,16 @@
             <div id="overlay-error" style="height:18px;margin-top:8px;color:#ff8a80;font-size:0.85rem;"></div>
             <p id="overlay-note" style="margin-top:6px;color:#9e9e9e;font-size:0.85rem;">Create a short ID to invite friends or paste a link you received.</p>
         </div>
+    </div>
+
+    <!-- Participant context menu -->
+    <div id="participant-context-menu" style="position:fixed;display:none;z-index:120;background:#222;border:1px solid #444;border-radius:6px;padding:6px;min-width:180px;color:#e0e0e0;box-shadow:0 6px 18px rgba(0,0,0,0.6);">
+        <div id="pcm-edit-name" style="padding:6px;cursor:pointer;border-radius:4px;">Change name</div>
+        <div id="pcm-toggle-mute" style="padding:6px;cursor:pointer;border-radius:4px;">Toggle mute (you)</div>
+        <div id="pcm-mute-target" style="padding:6px;cursor:pointer;border-radius:4px;display:none;">Mute participant</div>
+        <div id="pcm-kick" style="padding:6px;cursor:pointer;border-radius:4px;display:none;color:#ff8a80;">Kick participant</div>
+        <div id="pcm-set-mod" style="padding:6px;cursor:pointer;border-radius:4px;display:none;">Make moderator</div>
+        <div id="pcm-copy-id" style="padding:6px;cursor:pointer;border-radius:4px;">Copy peer ID</div>
     </div>
     <div class="header">
         <div class="controls">
@@ -918,6 +929,22 @@
             if (!myPeerId) return;
             const tile = addVideoTile(myPeerId, 'You (Local)', true, myPeerId);
             attachStreamToTile(tile, myStream, 'You (Local)', true);
+            // Attach speaking detection for local stream to update participant strip
+            try {
+                if (myStream) {
+                    const checkSpeaking = detectSpeaking(myStream);
+                    setInterval(() => {
+                        const speakingNow = checkSpeaking();
+                        // Toggle video tile speaking class
+                        if (speakingNow) tile.classList.add('speaking'); else tile.classList.remove('speaking');
+                        // Toggle participant tile glow
+                        const p = document.querySelector(`.participant-tile[data-peer-id="${myPeerId}"]`);
+                        if (p) {
+                            if (speakingNow) p.classList.add('participant-speaking'); else p.classList.remove('participant-speaking');
+                        }
+                    }, 150);
+                }
+            } catch (e) {}
             return tile;
         }
 
@@ -1025,12 +1052,20 @@
             const checkSpeaking = detectSpeaking(stream);
             setInterval(() => {
                 const activeTile = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`);
-                if (checkSpeaking()) {
+                const speaking = checkSpeaking();
+                if (speaking) {
                     activeTile?.classList.add('speaking');
                 } else {
                     activeTile?.classList.remove('speaking');
                 }
-            }, 100);
+                // Also toggle participant strip glow if peerId is known
+                if (peerId) {
+                    const p = document.querySelector(`.participant-tile[data-peer-id="${peerId}"]`);
+                    if (p) {
+                        if (speaking) p.classList.add('participant-speaking'); else p.classList.remove('participant-speaking');
+                    }
+                }
+            }, 150);
         }
 
         socket.on('users-list', (users) => {
@@ -1056,6 +1091,12 @@
                 const ownerTag = u.owner ? ' (owner)' : '';
                 const statusText = document.createTextNode(`${username}${isYou ? ' (you)' : ''}${ownerTag}`);
                 userItem.appendChild(statusText);
+                if (u.isMod) {
+                    const modTag = document.createElement('div');
+                    modTag.style = 'margin-left:auto;background:#4D7CFF;color:white;padding:2px 6px;border-radius:4px;font-size:0.7rem;';
+                    modTag.textContent = 'MOD';
+                    userItem.appendChild(modTag);
+                }
                 userList.appendChild(userItem);
 
                 if (peerId) peerIdsNow.add(peerId);
@@ -1079,6 +1120,12 @@
                     img.alt = username;
                     tile.appendChild(img);
 
+                    if (peerId) tile.setAttribute('data-peer-id', peerId);
+                    if (u.id) tile.setAttribute('data-socket-id', u.id);
+                    if (u.isMod) tile.setAttribute('data-is-mod', '1');
+                    if (u.owner) tile.setAttribute('data-owner', '1');
+                    if (u.mediaState && u.mediaState.audio) tile.setAttribute('data-audio', '1');
+
                     const nameDiv = document.createElement('div');
                     nameDiv.className = 'participant-name';
                     const isYou = peerId && peerId === currentUserId;
@@ -1091,8 +1138,33 @@
                         ownerBadge.textContent = 'OWNER';
                         tile.appendChild(ownerBadge);
                     }
+                    if (u.isMod) {
+                        const modBadge = document.createElement('div');
+                        modBadge.className = 'participant-owner';
+                        modBadge.style.color = '#4D7CFF';
+                        modBadge.textContent = 'MOD';
+                        tile.appendChild(modBadge);
+                    }
 
                     participantsStrip.appendChild(tile);
+
+                                // Right-click context menu for participant actions
+                                tile.addEventListener('contextmenu', (ev) => {
+                                    ev.preventDefault();
+                                    const socketId = tile.getAttribute('data-socket-id');
+                                    const targetIsMod = tile.getAttribute('data-is-mod') === '1';
+                                    const targetIsOwner = tile.getAttribute('data-owner') === '1';
+                                    const targetAudio = tile.getAttribute('data-audio') === '1';
+                                    const isYou = peerId && peerId === currentUserId;
+                                    const isModerator = (function(){
+                                        // Determine if local user is owner or mod by checking participants strip
+                                        const myTile = document.querySelector(`.participant-tile[data-peer-id="${currentUserId}"]`);
+                                        if (!myTile) return false;
+                                        return myTile.getAttribute('data-owner') === '1' || myTile.getAttribute('data-is-mod') === '1';
+                                    })();
+                                    showParticipantMenu(ev.clientX, ev.clientY, peerId, username, isYou, isModerator, socketId, targetIsMod, targetIsOwner, targetAudio);
+                                    return false;
+                                });
                 }
             });
 
@@ -1107,6 +1179,108 @@
             });
 
             syncPeerConnections();
+        });
+
+        // Participant context menu logic
+        const pcm = document.getElementById('participant-context-menu');
+        let pcmState = { peerId: null, username: null, isYou: false };
+
+        function showParticipantMenu(x, y, peerId, username, isYou, isModerator, socketId, targetIsMod, targetIsOwner, targetAudio) {
+            pcmState = { peerId, username, isYou, socketId, targetIsMod, targetIsOwner, targetAudio };
+            if (!pcm) return;
+            pcm.style.left = (x + 6) + 'px';
+            pcm.style.top = (y + 6) + 'px';
+            pcm.style.display = 'block';
+            // adjust options visibility
+            document.getElementById('pcm-edit-name').style.display = isYou ? 'block' : 'none';
+            document.getElementById('pcm-toggle-mute').style.display = isYou ? 'block' : 'none';
+            document.getElementById('pcm-mute-target').style.display = isModerator && !isYou ? 'block' : 'none';
+            document.getElementById('pcm-kick').style.display = isModerator && !targetIsOwner ? 'block' : 'none';
+            document.getElementById('pcm-set-mod').style.display = isModerator && !isYou ? 'block' : 'none';
+            document.getElementById('pcm-copy-id').style.display = peerId ? 'block' : 'none';
+            // Update set-mod label
+            const setModEl = document.getElementById('pcm-set-mod');
+            if (setModEl) setModEl.innerText = targetIsMod ? 'Remove moderator' : 'Make moderator';
+            // Update mute label
+            const muteEl = document.getElementById('pcm-mute-target');
+            if (muteEl) muteEl.innerText = targetAudio ? 'Mute participant' : 'Unmute participant';
+        }
+
+        function hideParticipantMenu() {
+            if (!pcm) return;
+            pcm.style.display = 'none';
+            pcmState = { peerId: null, username: null, isYou: false };
+        }
+
+        document.addEventListener('click', (e) => { hideParticipantMenu(); });
+
+        // Menu actions
+        const pcmEdit = document.getElementById('pcm-edit-name');
+        const pcmMute = document.getElementById('pcm-toggle-mute');
+        const pcmCopy = document.getElementById('pcm-copy-id');
+
+        if (pcmEdit) pcmEdit.addEventListener('click', (e) => {
+            e.stopPropagation(); hideParticipantMenu();
+            const newName = prompt('Enter your new display name', myUsername || '');
+            if (newName && newName.trim()) {
+                myUsername = newName.trim();
+                socket.emit('set-username', myUsername);
+                const dn = document.getElementById('display-name'); if (dn) dn.innerText = myUsername;
+            }
+        });
+
+        if (pcmMute) pcmMute.addEventListener('click', (e) => {
+            e.stopPropagation(); hideParticipantMenu();
+            // Toggle local audio
+            if (myStream && myStream.getAudioTracks && myStream.getAudioTracks().length > 0) {
+                const enabled = myStream.getAudioTracks()[0].enabled;
+                myStream.getAudioTracks().forEach(t => t.enabled = !enabled);
+                myMediaState.audio = !enabled;
+                sendMediaState();
+                showToast(myMediaState.audio ? 'Unmuted' : 'Muted');
+            } else {
+                showToast('No local audio track to mute.');
+            }
+        });
+
+        const pcmMuteTarget = document.getElementById('pcm-mute-target');
+        const pcmKick = document.getElementById('pcm-kick');
+        const pcmSetMod = document.getElementById('pcm-set-mod');
+
+        if (pcmMuteTarget) pcmMuteTarget.addEventListener('click', (e) => {
+            e.stopPropagation(); hideParticipantMenu();
+            const target = pcmState.socketId;
+            if (!target) return showToast('Target not available');
+            // Ask server to toggle mute state for target
+            const mute = pcmState.targetAudio; // if currently has audio, we want to mute
+            socket.emit('force-mute', { targetSocketId: target, mute: !!mute });
+        });
+
+        if (pcmKick) pcmKick.addEventListener('click', (e) => {
+            e.stopPropagation(); hideParticipantMenu();
+            const target = pcmState.socketId;
+            if (!target) return showToast('Target not available');
+            if (!confirm('Kick this participant from the room?')) return;
+            socket.emit('kick-user', { targetSocketId: target });
+        });
+
+        if (pcmSetMod) pcmSetMod.addEventListener('click', (e) => {
+            e.stopPropagation(); hideParticipantMenu();
+            const target = pcmState.socketId;
+            if (!target) return showToast('Target not available');
+            const makeMod = !pcmState.targetIsMod;
+            socket.emit('set-mod', { targetSocketId: target, makeMod });
+        });
+
+        if (pcmCopy) pcmCopy.addEventListener('click', (e) => {
+            e.stopPropagation(); hideParticipantMenu();
+            const pid = pcmState.peerId;
+            if (!pid) return showToast('No peer ID available');
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(pid).then(() => showToast('Peer ID copied'));
+            } else {
+                const tmp = document.createElement('textarea'); tmp.value = pid; document.body.appendChild(tmp); tmp.select(); try { document.execCommand('copy'); showToast('Peer ID copied'); } catch (e) { showToast('Copy failed'); } tmp.remove();
+            }
         });
 
         updateMediaStatus('Choose an option above to join with audio, video, or text-only.');
@@ -1222,6 +1396,28 @@
             showToast(msg || 'Avatar upload failed', 4000);
             if (avatarConfirm) avatarConfirm.disabled = false;
         });
+
+        // Handle moderator actions from server
+        socket.on('force-mute', (data) => {
+            const mute = !!data?.mute;
+            if (myStream && myStream.getAudioTracks && myStream.getAudioTracks().length > 0) {
+                myStream.getAudioTracks().forEach(t => t.enabled = !mute);
+            }
+            myMediaState.audio = !mute;
+            sendMediaState();
+            showToast(mute ? 'You were muted by a moderator' : 'You were unmuted by a moderator');
+        });
+
+        socket.on('kicked', (data) => {
+            showToast((data && data.reason) || 'You were kicked');
+            // Reset local room state and show overlay so user can rejoin
+            currentRoomId = null;
+            myMediaState = { audio: false, video: false };
+            stopCurrentStream();
+            setTimeout(() => { setUsername(); }, 800);
+        });
+
+        socket.on('action-error', (msg) => { showToast(msg || 'Action failed'); });
     </script>
 </body>
 </html>

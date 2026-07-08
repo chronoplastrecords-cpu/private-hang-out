@@ -1,6 +1,5 @@
 const express = require('express');
 const http = require('http');
-const https = require('https');
 const path = require('path');
 const { Server } = require('socket.io');
 
@@ -27,42 +26,6 @@ try {
     console.info('`sharp` not available — avatar auto-resize disabled. Install sharp to enable resizing.');
 }
 
-function buildBandcampOEmbedUrl(sourceUrl) {
-    const url = new URL('https://bandcamp.com/oembed');
-    url.searchParams.set('format', 'json');
-    url.searchParams.set('url', sourceUrl);
-    return url;
-}
-
-async function fetchBandcampOEmbed(sourceUrl) {
-    // Try canonical oEmbed endpoint first
-    let embedUrl = buildBandcampOEmbedUrl(sourceUrl).toString();
-    let response = await fetch(embedUrl, { redirect: 'follow' });
-    if (response.ok) {
-        return response.json();
-    }
-
-    // If the canonical oEmbed failed, try fetching the page and look for a rel="alternate" oEmbed link
-    try {
-        const pageResp = await fetch(sourceUrl, { redirect: 'follow' });
-        if (pageResp.ok) {
-            const html = await pageResp.text();
-            const match = html.match(/<link[^>]+rel=["']alternate["'][^>]+type=["']application\/(?:json\+oembed|oembed\+json)["'][^>]*>/i);
-            if (match) {
-                const hrefMatch = match[0].match(/href=["']([^"']+)["']/i);
-                if (hrefMatch && hrefMatch[1]) {
-                    const resolved = hrefMatch[1].startsWith('http') ? hrefMatch[1] : (new URL(hrefMatch[1], sourceUrl)).toString();
-                    response = await fetch(resolved, { redirect: 'follow' });
-                    if (response.ok) return response.json();
-                }
-            }
-        }
-    } catch (e) {
-        // ignore and fall through to error
-    }
-
-    throw new Error(`Bandcamp oEmbed failed (attempted ${embedUrl})`);
-}
 
 // Serve frontend files from the 'Public' directory
 app.use(express.static('Public'));
@@ -81,23 +44,7 @@ app.get('/health', (req, res) => {
     res.status(200).send('ok');
 });
 
-app.get('/oembed', async (req, res) => {
-    const sourceUrl = req.query.url;
-    if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) {
-        res.status(400).json({ error: 'Missing url query param' });
-        return;
-    }
-
-    try {
-        const data = await fetchBandcampOEmbed(sourceUrl);
-        res.set('Access-Control-Allow-Origin', '*');
-        res.json(data);
-    } catch (error) {
-        console.warn('Bandcamp oEmbed failed:', error.message);
-        res.set('Access-Control-Allow-Origin', '*');
-        res.status(502).json({ error: 'Unable to fetch Bandcamp embed data' });
-    }
-});
+// No Bandcamp proxy — embedding removed to keep codebase small and reliable.
 
 // Per-room state storage
 // rooms: { [roomId]: { currentVideo, playlist, queue, users: { socketId: { username, peerId, mediaState } }, speakingUsers: Set } }
@@ -572,7 +519,5 @@ if (require.main === module) {
 module.exports = {
     app,
     server,
-    io,
-    buildBandcampOEmbedUrl,
-    fetchBandcampOEmbed
+    io
 };

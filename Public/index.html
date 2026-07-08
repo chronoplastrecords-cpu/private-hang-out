@@ -360,7 +360,7 @@
             const title = short.length > 24 ? short.slice(0, 24) + '...' : short;
             switch ((platform||'').toLowerCase()) {
                 case 'vimeo': return `Vimeo: ${title}`;
-                case 'bandcamp': return `Bandcamp: ${title}`;
+                case 'audio': return `Audio: ${title}`;
                 case 'uguu': return `Uguu: ${title}`;
                 default: return `YouTube: ${title}`;
             }
@@ -408,8 +408,8 @@
                 const icon = (function(p){
                     switch((p||'').toLowerCase()){
                         case 'vimeo': return '🎬 ';
-                        case 'bandcamp': return '🎵 ';
                         case 'uguu': return '🔗 ';
+                        case 'audio': return '🎵 ';
                         default: return '▶️ ';
                     }
                 })(item.platform);
@@ -467,8 +467,8 @@
                 const icon = (function(p){
                     switch((p||'').toLowerCase()){
                         case 'vimeo': return '🎬 ';
-                        case 'bandcamp': return '🎵 ';
                         case 'uguu': return '🔗 ';
+                        case 'audio': return '🎵 ';
                         default: return '▶️ ';
                     }
                 })(item.platform);
@@ -573,10 +573,7 @@
                 return { platform: 'uguu', id: trimmed, url: trimmed };
             }
 
-            // Bandcamp URL
-            if (/bandcamp\.com/i.test(trimmed)) {
-                return { platform: 'bandcamp', id: trimmed, url: trimmed };
-            }
+            // (Bandcamp support removed) — fall through to default handling
 
             // Fallback: treat as YouTube-like id or raw url
             return { platform: 'youtube', id: trimmed, url: trimmed };
@@ -687,58 +684,7 @@
             htmlMediaElement = el;
         }
 
-        // --- Bandcamp support (best-effort embed / fallback link) ---
-        function loadBandcamp(url) {
-            destroyCurrentPlayer();
-            const container = document.getElementById('player');
-            // First, try Bandcamp oEmbed to get an official embed snippet via server proxy
-            const proxyUrl = `/oembed?url=${encodeURIComponent(url)}`;
-            fetch(proxyUrl).then(r => {
-                if (!r.ok) throw new Error('oembed fetch failed');
-                return r.json();
-            }).then(data => {
-                if (data && data.html) {
-                    // Use an iframe with srcdoc + base href so relative assets in the oEmbed HTML resolve
-                    try {
-                        const iframe = document.createElement('iframe');
-                        iframe.width = '100%';
-                        iframe.height = '100%';
-                        iframe.frameBorder = '0';
-                        iframe.allow = 'autoplay; encrypted-media; fullscreen';
-                        // Build a small wrapper that sets <base> so relative urls resolve to the original Bandcamp page
-                        const base = `<base href="${escapeHtml(url)}">`;
-                        const srcdoc = base + (data.html || '');
-                        iframe.srcdoc = srcdoc;
-                        // Fallback: if browser doesn't support srcdoc, write into iframe after append
-                        container.appendChild(iframe);
-                        setTimeout(() => {
-                            try {
-                                // If srcdoc isn't applied, try writing into the iframe document
-                                const idoc = iframe.contentDocument || iframe.contentWindow.document;
-                                if (idoc && (!idoc.body || idoc.body.innerHTML.trim() === '')) {
-                                    idoc.open(); idoc.write(srcdoc); idoc.close();
-                                }
-                            } catch (e) {
-                                // ignore cross-origin issues — fallback will be shown below
-                            }
-                        }, 50);
-                    } catch (e) {
-                        container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Unable to embed content.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
-                    }
-                } else {
-                    // No html returned — show link fallback
-                    container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Unable to embed content.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
-                }
-            }).catch(() => {
-                // If oEmbed fails (CORS or other), show a friendly fallback link
-                container.innerHTML = `<div style="padding:20px;color:#ddd;display:flex;align-items:center;justify-content:center;height:100%;"><div><p>Cannot embed Bandcamp.</p><p><a href="${url}" target="_blank" style="color:#4CAF50;">Open on Bandcamp</a></p></div></div>`;
-            });
-        }
-
-        // Simple HTML escaper for use in srcdoc/base construction
-        function escapeHtml(str) {
-            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
-        }
+        // Bandcamp support removed — no client embed logic
 
         function destroyCurrentPlayer() {
             // Clear YT player
@@ -777,10 +723,6 @@
                 case 'uguu':
                     addToHistory('uguu', idOrUrl, url);
                     loadUguuMedia(idOrUrl);
-                    break;
-                case 'bandcamp':
-                    addToHistory('bandcamp', idOrUrl, url);
-                    loadBandcamp(url || idOrUrl);
                     break;
                 default:
                     const finalId = idOrUrl; // YouTube id/url

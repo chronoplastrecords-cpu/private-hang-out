@@ -139,6 +139,17 @@
                     <button onclick="setUsername()">Set Name</button>
                 </div>
 
+                <div class="voice-box">
+                    <h3>Media Setup</h3>
+                    <p>Join with audio, video, or text-only.</p>
+                    <button onclick="requestMediaAccess('audio')">Join Audio</button>
+                    <button onclick="requestMediaAccess('video')" style="margin-top: 6px;">Join Video</button>
+                    <button onclick="requestMediaAccess('audio-video')" style="margin-top: 6px;">Join Audio + Video</button>
+                    <button onclick="requestMediaAccess('none')" style="margin-top: 6px; background: #607D8B;">Text Only</button>
+                    <p id="media-status" style="margin-top: 8px; color: #4CAF50; font-size: 0.8rem;">Connecting to room audio…</p>
+                    <p style="margin-top: 6px; font-size: 0.75rem;">Your room ID: <span id="my-id">Connecting…</span></p>
+                </div>
+
                 <div style="flex: 1; display: flex; flex-direction: column; min-height: 200px;">
                     <h3 style="margin: 0 0 8px 0; font-size: 0.95rem;">Text Chat</h3>
                     <div id="chat-box"></div>
@@ -167,7 +178,12 @@
     </div>
 
     <script>
-        const socket = io();
+        const socket = io({
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: 10,
+            reconnectionDelay: 1000
+        });
         let myUsername = 'Anonymous';
         let playlist = [];
         let currentPlayingIndex = -1;
@@ -385,59 +401,6 @@
             const text = data.text || data; // Support old format too
             chatBox.innerHTML += `<div class="chat-msg"><strong>${username}:</strong> ${text}</div>`;
             chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to bottom
-        });
-
-        // --- 1b. USER LIST MANAGEMENT ---
-        let connectedPeerIds = new Set();
-
-        socket.on('users-list', (users) => {
-            // users: [{ username, peerId }]
-            const userList = document.getElementById('user-list');
-            userList.innerHTML = '';
-
-            const peerIdsNow = new Set();
-
-            users.forEach(u => {
-                const username = u.username || 'Anonymous';
-                const peerId = u.peerId || null;
-
-                const userItem = document.createElement('div');
-                userItem.className = 'user-item';
-                const profileImg = document.createElement('img');
-                profileImg.src = generateProfilePicture(username);
-                profileImg.style = 'width: 24px; height: 24px; border-radius: 50%; margin-right: 8px; vertical-align: middle;';
-                userItem.appendChild(profileImg);
-                userItem.appendChild(document.createTextNode(username));
-                userList.appendChild(userItem);
-
-                if (peerId) peerIdsNow.add(peerId);
-                // Auto-call new peers (group mesh)
-                if (peerId && myPeerId && peerId !== myPeerId && !connectedPeerIds.has(peerId) && myStream) {
-                    try {
-                        const call = peer.call(peerId, myStream);
-                        connectedPeerIds.add(peerId);
-                        call.on('stream', (remoteStream) => {
-                            playVideo(remoteStream, peerId);
-                        });
-                        call.on('close', () => {
-                            connectedPeerIds.delete(peerId);
-                        });
-                    } catch (err) {
-                        console.warn('Auto-call failed to', peerId, err);
-                    }
-                }
-            });
-
-            // Remove video tiles for peers that disappeared
-            const videoContainer = document.getElementById('video-container');
-            const tiles = Array.from(videoContainer.querySelectorAll('[data-peer-id]'));
-            tiles.forEach(t => {
-                const p = t.getAttribute('data-peer-id');
-                if (p && !peerIdsNow.has(p) && p !== myPeerId) {
-                    t.remove();
-                    connectedPeerIds.delete(p);
-                }
-            });
         });
 
         // --- 2. VIDEO SYNC ---
@@ -694,11 +657,28 @@
         });
 
         // --- 3. WEB RTC VIDEO CHAT ---
-        const peer = new Peer(); // Hooks directly into PeerJS free cloud servers
-        let myStream;
-        let myPeerId;
+        const peer = new Peer(undefined, {
+            host: '0.peerjs.com',
+            port: 443,
+            secure: true,
+            path: '/',
+            debug: 2,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        });
+        let myStream = null;
+        let myPeerId = null;
+        let myMediaState = { audio: false, video: false };
         let activeStreams = {}; // Track active streams
         let audioContexts = {}; // Track audio analysis for speaker detection
+        let connectedPeerIds = new Set();
+        let userNamesByPeerId = {};
+        let roomMembers = [];
+        let mediaSetupInProgress = false;
 
         // Generate a profile picture based on username
         function generateProfilePicture(username) {
@@ -721,8 +701,44 @@
             return canvas.toDataURL();
         }
 
+        function updateMediaStatus(message, isError = false) {
+            const status = document.getElementById('media-status');
+            if (!status) return;
+            status.textContent = message;
+            status.style.color = isError ? '#ff8a80' : '#4CAF50';
+        }
+
+        function stopCurrentStream() {
+            if (myStream) {
+                myStream.getTracks().forEach(track => track.stop());
+            }
+            myStream = null;
+        }
+
+        function sendMediaState() {
+            socket.emit('set-media-state', myMediaState);
+        }
+
+        function getMediaConstraints(mode) {
+            switch (mode) {
+                case 'video':
+                    return { video: true, audio: false };
+                case 'audio-video':
+                    return { video: true, audio: true };
+                case 'none':
+                    return null;
+                case 'audio':
+                default:
+                    return { video: false, audio: true };
+            }
+        }
+
         // Detect if audio stream is active (user speaking)
         function detectSpeaking(stream) {
+            if (!stream || !stream.getAudioTracks || stream.getAudioTracks().length === 0) {
+                return () => false;
+            }
+
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
             const analyser = audioContext.createAnalyser();
             const source = audioContext.createMediaStreamAudioSource(stream);
@@ -740,68 +756,11 @@
             return checkVolume;
         }
 
-        peer.on('open', (id) => {
-            myPeerId = id;
-            document.getElementById('my-id').innerText = id;
-            socket.emit('register-peer', id); // Register peer ID with server
-            // Add my own video feed when we have a stream
-            if (myStream) {
-                const videoContainer = document.getElementById('video-container');
-                addVideoTile(myPeerId, 'You (Local)', true, myPeerId);
-                const myTile = videoContainer.querySelector(`[data-peer-id="${myPeerId}"]`);
-                if (myTile) {
-                    const vid = myTile.querySelector('video');
-                    if (vid) vid.srcObject = myStream;
-                }
-            }
-        });
-
-        // Request microphone AND camera access
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
-            myStream = stream;
-            const videoContainer = document.getElementById('video-container');
-            // Ensure local tile is created and bound
-            if (myPeerId) {
-                addVideoTile(myPeerId, 'You (Local)', true, myPeerId);
-                const myVideoTile = videoContainer.querySelector(`[data-peer-id="${myPeerId}"]`);
-                if (myVideoTile) {
-                    const video = myVideoTile.querySelector('video');
-                    if (video) video.srcObject = stream;
-                }
-            }
-
-            // Auto-call existing peers now that we have a stream
-            // Request current users from server via emitting a no-op to trigger users-list or rely on previous users-list updates
-            // Any peers discovered via 'users-list' handler will be auto-called when myStream is present
-        }).catch(err => {
-            alert("Camera and Microphone access is required for video chat!");
-            console.error(err);
-        });
-
-        // Handle incoming calls from friends
-        peer.on('call', (call) => {
-            call.answer(myStream); 
-            call.on('stream', (remoteStream) => {
-                playVideo(remoteStream, call.peer);
-            });
-        });
-
-        // Initiate a call to a friend using their ID
-        function callFriend() {
-            const friendId = document.getElementById('peer-id-input').value;
-            if(friendId && myStream) {
-                const call = peer.call(friendId, myStream);
-                call.on('stream', (remoteStream) => {
-                    playVideo(remoteStream, call.peer);
-                });
-            }
-        }
-
         function addVideoTile(streamId, username, isLocal = false, peerId = null) {
             const container = document.getElementById('video-container');
-            
-            // Check if tile already exists
-            if (container.querySelector(`[data-stream-id="${streamId}"]`)) return;
+            if (container.querySelector(`[data-stream-id="${streamId}"]`)) {
+                return container.querySelector(`[data-stream-id="${streamId}"]`);
+            }
             
             const tile = document.createElement('div');
             tile.className = 'video-tile';
@@ -809,46 +768,207 @@
             if (peerId) tile.setAttribute('data-peer-id', peerId);
             tile.setAttribute('data-username', username);
             
-            const video = document.createElement('video');
-            video.autoplay = true;
-            video.muted = isLocal; // Mute local audio
-            video.playsinline = true;
-            
             const label = document.createElement('div');
             label.className = 'user-label';
             label.textContent = username;
             
-            tile.appendChild(video);
             tile.appendChild(label);
             container.appendChild(tile);
+            return tile;
         }
+
+        function attachStreamToTile(tile, stream, username, isLocal = false) {
+            if (!tile) return;
+
+            tile.setAttribute('data-username', username);
+            const label = tile.querySelector('.user-label');
+            if (label) label.textContent = username;
+
+            const existingMedia = tile.querySelector('video,audio,.media-placeholder');
+            if (existingMedia) existingMedia.remove();
+
+            const hasVideo = stream && stream.getVideoTracks && stream.getVideoTracks().length > 0;
+            const hasAudio = stream && stream.getAudioTracks && stream.getAudioTracks().length > 0;
+            if (stream && (hasVideo || hasAudio)) {
+                const mediaEl = hasVideo ? document.createElement('video') : document.createElement('audio');
+                mediaEl.autoplay = true;
+                mediaEl.playsinline = true;
+                mediaEl.muted = isLocal;
+                mediaEl.srcObject = stream;
+                if (hasVideo) {
+                    mediaEl.style.width = '100%';
+                    mediaEl.style.height = '100%';
+                    mediaEl.style.objectFit = 'cover';
+                } else if (isLocal) {
+                    mediaEl.style.display = 'none';
+                }
+                tile.insertBefore(mediaEl, label);
+            } else {
+                const placeholder = document.createElement('div');
+                placeholder.className = 'media-placeholder';
+                placeholder.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:2rem;">🎙️</div>';
+                tile.insertBefore(placeholder, label);
+            }
+        }
+
+        function ensureLocalTile() {
+            if (!myPeerId) return;
+            const tile = addVideoTile(myPeerId, 'You (Local)', true, myPeerId);
+            attachStreamToTile(tile, myStream, 'You (Local)', true);
+            return tile;
+        }
+
+        function initiateCall(peerId) {
+            if (!peerId || connectedPeerIds.has(peerId) || peerId === myPeerId || !myStream) return;
+
+            connectedPeerIds.add(peerId);
+            const call = peer.call(peerId, myStream);
+            call.on('stream', (remoteStream) => {
+                playVideo(remoteStream, peerId);
+            });
+            call.on('close', () => {
+                connectedPeerIds.delete(peerId);
+            });
+            call.on('error', (err) => {
+                connectedPeerIds.delete(peerId);
+                console.warn('Call failed to', peerId, err);
+            });
+        }
+
+        function syncPeerConnections() {
+            if (!myPeerId) return;
+            roomMembers.forEach(member => {
+                if (member.peerId && member.peerId !== myPeerId) {
+                    initiateCall(member.peerId);
+                }
+            });
+        }
+
+        async function requestMediaAccess(mode = 'audio') {
+            if (mediaSetupInProgress) return;
+            mediaSetupInProgress = true;
+            updateMediaStatus('Requesting media access...');
+
+            stopCurrentStream();
+            const constraints = getMediaConstraints(mode);
+            if (!constraints) {
+                myMediaState = { audio: false, video: false };
+                myStream = null;
+                sendMediaState();
+                ensureLocalTile();
+                updateMediaStatus('Text-only mode enabled. You can still use chat.');
+                mediaSetupInProgress = false;
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                myStream = stream;
+                myMediaState = {
+                    audio: stream.getAudioTracks().length > 0,
+                    video: stream.getVideoTracks().length > 0,
+                };
+                sendMediaState();
+                ensureLocalTile();
+                syncPeerConnections();
+                const label = myMediaState.video
+                    ? (myMediaState.audio ? 'Camera and microphone are live.' : 'Camera only is live.')
+                    : 'Microphone only is live.';
+                updateMediaStatus(label);
+            } catch (err) {
+                console.error('Media access failed', err);
+                myMediaState = { audio: false, video: false };
+                myStream = null;
+                sendMediaState();
+                ensureLocalTile();
+                updateMediaStatus('Media access was blocked. You can still use text chat.', true);
+            } finally {
+                mediaSetupInProgress = false;
+            }
+        }
+
+        peer.on('open', (id) => {
+            myPeerId = id;
+            document.getElementById('my-id').innerText = id;
+            socket.emit('register-peer', id); // Register peer ID with server
+            sendMediaState();
+            ensureLocalTile();
+            syncPeerConnections();
+        });
+
+        // Handle incoming calls from friends
+        peer.on('call', (call) => {
+            if (myStream) {
+                call.answer(myStream);
+            } else {
+                call.answer();
+            }
+            call.on('stream', (remoteStream) => {
+                playVideo(remoteStream, call.peer);
+            });
+            call.on('close', () => {
+                connectedPeerIds.delete(call.peer);
+            });
+        });
 
         function playVideo(stream, peerId) {
+            if (!stream) return;
             activeStreams[stream.id] = { stream, peerId };
-            const tile = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`);
+            const label = userNamesByPeerId[peerId] || (peerId ? `Peer ${peerId.slice(0, 8)}` : 'Peer');
+            const tile = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`) || addVideoTile(stream.id, label, false, peerId);
+            attachStreamToTile(tile, stream, label, false);
 
-            if (!tile) {
-                // Use peerId as identifier and label if username not available
-                const label = peerId ? `Peer ${peerId.slice(0, 8)}` : 'Peer';
-                addVideoTile(stream.id, label, false, peerId);
-            }
-
-            const video = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`)?.querySelector('video');
-            if (video) {
-                video.srcObject = stream;
-                
-                // Detect speaking
-                const checkSpeaking = detectSpeaking(stream);
-                setInterval(() => {
-                    const tile = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`);
-                    if (checkSpeaking()) {
-                        tile?.classList.add('speaking');
-                    } else {
-                        tile?.classList.remove('speaking');
-                    }
-                }, 100);
-            }
+            const checkSpeaking = detectSpeaking(stream);
+            setInterval(() => {
+                const activeTile = document.getElementById('video-container').querySelector(`[data-stream-id="${stream.id}"]`);
+                if (checkSpeaking()) {
+                    activeTile?.classList.add('speaking');
+                } else {
+                    activeTile?.classList.remove('speaking');
+                }
+            }, 100);
         }
+
+        socket.on('users-list', (users) => {
+            roomMembers = users || [];
+            const userList = document.getElementById('user-list');
+            userList.innerHTML = '';
+
+            const peerIdsNow = new Set();
+            const currentUserId = myPeerId;
+
+            users.forEach(u => {
+                const username = u.username || 'Anonymous';
+                const peerId = u.peerId || null;
+                userNamesByPeerId[peerId] = username;
+
+                const userItem = document.createElement('div');
+                userItem.className = 'user-item';
+                const profileImg = document.createElement('img');
+                profileImg.src = generateProfilePicture(username);
+                profileImg.style = 'width: 24px; height: 24px; border-radius: 50%; margin-right: 8px; vertical-align: middle;';
+                userItem.appendChild(profileImg);
+                const statusText = document.createTextNode(`${username}${peerId && peerId === currentUserId ? ' (you)' : ''}`);
+                userItem.appendChild(statusText);
+                userList.appendChild(userItem);
+
+                if (peerId) peerIdsNow.add(peerId);
+            });
+
+            const videoContainer = document.getElementById('video-container');
+            const tiles = Array.from(videoContainer.querySelectorAll('[data-peer-id]'));
+            tiles.forEach(t => {
+                const p = t.getAttribute('data-peer-id');
+                if (p && !peerIdsNow.has(p) && p !== myPeerId) {
+                    t.remove();
+                    connectedPeerIds.delete(p);
+                }
+            });
+
+            syncPeerConnections();
+        });
+
+        updateMediaStatus('Choose an option above to join with audio, video, or text-only.');
     </script>
 </body>
 </html>

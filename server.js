@@ -4,8 +4,15 @@ const path = require('path');
 const { Server } = require('socket.io');
 
 const app = express();
+app.set('trust proxy', true);
+
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: {
+        origin: true,
+        methods: ['GET', 'POST']
+    }
+});
 
 // Serve frontend files from the 'Public' directory
 app.use(express.static('Public'));
@@ -14,17 +21,21 @@ app.use(express.static('Public'));
 app.use('/js/peerjs', express.static(path.join(__dirname, 'node_modules', 'peerjs', 'dist')));
 app.use('/js/socket.io', express.static(path.join(__dirname, 'node_modules', 'socket.io', 'client-dist')));
 
+app.get('/health', (req, res) => {
+    res.status(200).send('ok');
+});
+
 let currentVideo = { platform: 'youtube', id: 'dQw4w9WgXcQ' }; // Default video
 let playlist = []; // Shared playlist for all users
 let queue = []; // Shared video queue
-let users = {}; // Track users: { socketId: { username, peerId } }
+let users = {}; // Track users: { socketId: { username, peerId, mediaState } }
 let speakingUsers = new Set(); // Track who's currently speaking
 
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
     
-    // Set default username
-    users[socket.id] = { username: 'Anonymous', peerId: null };
+    // Set default username and media state
+    users[socket.id] = { username: 'Anonymous', peerId: null, mediaState: { audio: false, video: false } };
     broadcastUsersList();
 
     // Send the current video to the new user immediately
@@ -51,6 +62,17 @@ io.on('connection', (socket) => {
         }
         broadcastUsersList();
         console.log(`User ${socket.id} set username to: ${username}`);
+    });
+
+    // Handle media state changes for audio/video join flow
+    socket.on('set-media-state', (mediaState) => {
+        if (users[socket.id]) {
+            users[socket.id].mediaState = {
+                audio: !!mediaState?.audio,
+                video: !!mediaState?.video,
+            };
+            broadcastUsersList();
+        }
     });
 
     // Handle Text Chat
@@ -140,12 +162,17 @@ io.on('connection', (socket) => {
 
 // Broadcast the list of users to all connected clients
 function broadcastUsersList() {
-    const usersArray = Object.values(users).map(u => ({ username: u.username, peerId: u.peerId }));
+    const usersArray = Object.entries(users).map(([socketId, u]) => ({
+        id: socketId,
+        username: u.username,
+        peerId: u.peerId,
+        mediaState: u.mediaState || { audio: false, video: false },
+    }));
     io.emit('users-list', usersArray);
 }
 
 // Glitch uses process.env.PORT to assign dynamic ports
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Hangout running on port ${PORT}`);
 });

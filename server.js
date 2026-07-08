@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const path = require('path');
 const { Server } = require('socket.io');
 
@@ -26,6 +27,22 @@ try {
     console.info('`sharp` not available — avatar auto-resize disabled. Install sharp to enable resizing.');
 }
 
+function buildBandcampOEmbedUrl(sourceUrl) {
+    const url = new URL('https://bandcamp.com/oembed');
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('url', sourceUrl);
+    return url;
+}
+
+async function fetchBandcampOEmbed(sourceUrl) {
+    const embedUrl = buildBandcampOEmbedUrl(sourceUrl);
+    const response = await fetch(embedUrl);
+    if (!response.ok) {
+        throw new Error(`Bandcamp oEmbed failed with ${response.status}`);
+    }
+    return response.json();
+}
+
 // Serve frontend files from the 'Public' directory
 app.use(express.static('Public'));
 
@@ -41,6 +58,24 @@ try { fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) { /* ignore */
 
 app.get('/health', (req, res) => {
     res.status(200).send('ok');
+});
+
+app.get('/oembed', async (req, res) => {
+    const sourceUrl = req.query.url;
+    if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) {
+        res.status(400).json({ error: 'Missing url query param' });
+        return;
+    }
+
+    try {
+        const data = await fetchBandcampOEmbed(sourceUrl);
+        res.set('Access-Control-Allow-Origin', '*');
+        res.json(data);
+    } catch (error) {
+        console.warn('Bandcamp oEmbed failed:', error.message);
+        res.set('Access-Control-Allow-Origin', '*');
+        res.status(502).json({ error: 'Unable to fetch Bandcamp embed data' });
+    }
 });
 
 // Per-room state storage
@@ -507,6 +542,16 @@ function broadcastUsersList(roomId) {
 
 // Glitch uses process.env.PORT to assign dynamic ports
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.info(`Hangout running on port ${PORT}`);
-});
+if (require.main === module) {
+    server.listen(PORT, '0.0.0.0', () => {
+        console.info(`Hangout running on port ${PORT}`);
+    });
+}
+
+module.exports = {
+    app,
+    server,
+    io,
+    buildBandcampOEmbedUrl,
+    fetchBandcampOEmbed
+};

@@ -166,10 +166,17 @@
                         <div class="username-box">
                             <h3>Your Name</h3>
                             <div id="display-name" style="padding:8px;border-radius:4px;background:#111;color:#e0e0e0;font-weight:bold;">Anonymous</div>
-                            <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+                            <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
                                 <label style="font-size:0.85rem;color:#cfcfcf;">Avatar</label>
-                                <input id="avatar-input" type="file" accept="image/*" style="display:none;">
-                                <button onclick="document.getElementById('avatar-input').click()" style="padding:6px;border-radius:4px;background:#2196F3;border:none;color:white;">Upload</button>
+                                <div style="display:flex;align-items:center;gap:8px;">
+                                    <input id="avatar-input" type="file" accept="image/*" style="display:none;">
+                                    <button id="avatar-upload-btn" onclick="document.getElementById('avatar-input').click()" style="padding:6px;border-radius:4px;background:#2196F3;border:none;color:white;">Upload</button>
+                                    <img id="avatar-preview" src="" alt="preview" style="width:40px;height:40px;border-radius:50%;display:none;border:2px solid #333;object-fit:cover;" />
+                                </div>
+                                <div id="avatar-actions" style="display:none;gap:8px;">
+                                    <button id="avatar-confirm" style="padding:6px;border-radius:4px;background:#4CAF50;border:none;color:white;">Confirm</button>
+                                    <button id="avatar-cancel" style="padding:6px;border-radius:4px;background:#607D8B;border:none;color:white;">Cancel</button>
+                                </div>
                             </div>
 
                             <div style="margin-top:10px;">
@@ -715,7 +722,7 @@
 
             socket.emit('video-change', { platform: parsed.platform, id: parsed.id || parsed.url, url: parsed.url });
             loadMedia(parsed.platform, parsed.id || parsed.url, parsed.url);
-            console.log(`[Hangout] Loading ${parsed.platform}: ${parsed.id || parsed.url}`);
+            console.debug(`[Hangout] Loading ${parsed.platform}: ${parsed.id || parsed.url}`);
         }
 
         function loadMedia(platform, idOrUrl, url) {
@@ -1148,8 +1155,13 @@
             setTimeout(() => { t.style.opacity = '0'; }, timeout);
         }
 
-        // Avatar upload handling
+        // Avatar upload handling with preview + confirm/cancel
         const avatarInput = document.getElementById('avatar-input');
+        const avatarPreview = document.getElementById('avatar-preview');
+        const avatarConfirm = document.getElementById('avatar-confirm');
+        const avatarCancel = document.getElementById('avatar-cancel');
+        let pendingAvatarDataUrl = null;
+
         if (avatarInput) {
             avatarInput.addEventListener('change', (e) => {
                 const f = e.target.files && e.target.files[0];
@@ -1157,13 +1169,59 @@
                 const reader = new FileReader();
                 reader.onload = () => {
                     const dataUrl = reader.result;
-                    // Emit via socket to server which will save and broadcast
-                    socket.emit('upload-avatar', dataUrl);
-                    showToast('Uploading avatar...');
+                    pendingAvatarDataUrl = dataUrl;
+                    if (avatarPreview) {
+                        avatarPreview.src = dataUrl;
+                        avatarPreview.style.display = 'block';
+                    }
+                    const actions = document.getElementById('avatar-actions');
+                    if (actions) actions.style.display = 'flex';
                 };
                 reader.readAsDataURL(f);
             });
         }
+
+        if (avatarConfirm) {
+            avatarConfirm.addEventListener('click', () => {
+                if (!pendingAvatarDataUrl) return;
+                // Emit via socket to server which will save and broadcast
+                socket.emit('upload-avatar', pendingAvatarDataUrl);
+                showToast('Uploading avatar...');
+                avatarConfirm.disabled = true;
+                // Keep preview visible until server confirms
+            });
+        }
+
+        if (avatarCancel) {
+            avatarCancel.addEventListener('click', () => {
+                pendingAvatarDataUrl = null;
+                if (avatarPreview) { avatarPreview.src = ''; avatarPreview.style.display = 'none'; }
+                const actions = document.getElementById('avatar-actions');
+                if (actions) actions.style.display = 'none';
+                if (avatarInput) avatarInput.value = null;
+                if (avatarConfirm) avatarConfirm.disabled = false;
+            });
+        }
+
+        // Handle server responses for avatar uploads
+        socket.on('avatar-upload-success', (avatarUrl) => {
+            showToast('Avatar uploaded');
+            // Update preview to served URL (with cachebuster provided by server)
+            if (avatarPreview && avatarUrl) {
+                avatarPreview.src = avatarUrl;
+                avatarPreview.style.display = 'block';
+            }
+            pendingAvatarDataUrl = null;
+            const actions = document.getElementById('avatar-actions');
+            if (actions) actions.style.display = 'none';
+            if (avatarInput) avatarInput.value = null;
+            if (avatarConfirm) avatarConfirm.disabled = false;
+        });
+
+        socket.on('avatar-upload-error', (msg) => {
+            showToast(msg || 'Avatar upload failed', 4000);
+            if (avatarConfirm) avatarConfirm.disabled = false;
+        });
     </script>
 </body>
 </html>

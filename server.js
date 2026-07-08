@@ -16,6 +16,15 @@ const io = new Server(server, {
 
 const fs = require('fs');
 const ROOMS_FILE = path.join(__dirname, 'rooms.json');
+// Avatar upload limits
+const MAX_AVATAR_BYTES = 200 * 1024; // 200 KB
+const ALLOWED_AVATAR_MIME = ['image/png', 'image/jpeg'];
+let sharp = null;
+try {
+    sharp = require('sharp');
+} catch (e) {
+    console.info('`sharp` not available — avatar auto-resize disabled. Install sharp to enable resizing.');
+}
 
 // Serve frontend files from the 'Public' directory
 app.use(express.static('Public'));
@@ -57,7 +66,7 @@ function loadRooms() {
                         ownerName: data.ownerName || null
                 };
             });
-            console.log('Loaded persisted rooms from', ROOMS_FILE);
+            console.info('Loaded persisted rooms from', ROOMS_FILE);
         }
     } catch (e) {
         console.warn('Failed to load rooms file:', e.message);
@@ -82,7 +91,6 @@ function saveRooms() {
             };
         });
         fs.writeFileSync(ROOMS_FILE, JSON.stringify(toSave, null, 2), 'utf8');
-        //console.log('Rooms persisted to', ROOMS_FILE);
     } catch (e) {
         console.warn('Failed to save rooms:', e.message);
     }
@@ -96,7 +104,7 @@ process.on('SIGTERM', () => { saveRooms(); process.exit(); });
 loadRooms();
 
 io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+    console.info('User connected:', socket.id);
     // Set default username and media state; room will be set when user joins
     users[socket.id] = { username: 'Anonymous', peerId: null, mediaState: { audio: false, video: false }, room: null };
 
@@ -105,25 +113,82 @@ io.on('connection', (socket) => {
         if (users[socket.id]) {
             users[socket.id].peerId = peerId;
             broadcastUsersList(users[socket.id].room);
-            console.log(`User ${socket.id} registered peer ID: ${peerId}`);
+            console.debug(`User ${socket.id} registered peer ID: ${peerId}`);
         }
     });
 
-    // Handle avatar upload (dataURL) via socket
-    socket.on('upload-avatar', (dataUrl) => {
+    // Handle avatar upload (dataURL) via socket with validation and optional resizing
+    socket.on('upload-avatar', async (dataUrl) => {
         try {
-            if (!dataUrl || typeof dataUrl !== 'string') return;
+            if (!dataUrl || typeof dataUrl !== 'string') {
+                socket.emit('avatar-upload-error', 'Invalid image data');
+                return;
+            }
             const matches = dataUrl.match(/^data:(image\/(png|jpeg|jpg));base64,(.+)$/);
-            if (!matches) return;
+            if (!matches) {
+                socket.emit('avatar-upload-error', 'Unsupported image format. Only PNG and JPEG allowed.');
+                return;
+            }
+            const mime = matches[1];
+            if (!ALLOWED_AVATAR_MIME.includes(mime)) {
+                socket.emit('avatar-upload-error', 'Unsupported image MIME type.');
+                return;
+            }
             const ext = matches[2] === 'jpeg' ? 'jpg' : matches[2];
             const b64 = matches[3];
-            const buf = Buffer.from(b64, 'base64');
+            let buf = Buffer.from(b64, 'base64');
+
+            // If too large, attempt to resize/convert using sharp if available
+            if (buf.length > MAX_AVATAR_BYTES) {
+                if (!sharp) {
+                    socket.emit('avatar-upload-error', `Image too large (${Math.round(buf.length/1024)}KB). Max ${Math.round(MAX_AVATAR_BYTES/1024)}KB.`);
+                    return;
+                }
+                try {
+                    // Resize to 256x256 cover and convert to JPEG; iteratively reduce quality until under limit
+                    let quality = 80;
+                    let converted = await sharp(buf).resize(256, 256, { fit: 'cover' }).jpeg({ quality }).toBuffer();
+                    while (converted.length > MAX_AVATAR_BYTES && quality > 30) {
+                        quality -= 10;
+                        converted = await sharp(buf).resize(256, 256, { fit: 'cover' }).jpeg({ quality }).toBuffer();
+                    }
+                    if (converted.length > MAX_AVATAR_BYTES) {
+                        socket.emit('avatar-upload-error', `Could not compress image below ${Math.round(MAX_AVATAR_BYTES/1024)}KB.`);
+                        return;
+                    }
+                    buf = converted;
+                    // use jpg extension for converted images
+                    const outExt = 'jpg';
+                    const filename = `${socket.id}.${outExt}`;
+                    const outPath = path.join(UPLOADS_DIR, filename);
+                    fs.writeFileSync(outPath, buf);
+                    const avatarUrl = `/uploads/${filename}?t=${Date.now()}`;
+                    if (users[socket.id]) {
+                        users[socket.id].avatar = avatarUrl;
+                        const roomId = users[socket.id].room;
+                        if (roomId && rooms[roomId]) {
+                            if (!rooms[roomId].users) rooms[roomId].users = {};
+                            rooms[roomId].users[socket.id] = users[socket.id];
+                        }
+                    }
+                    const roomId = users[socket.id]?.room;
+                    if (roomId) broadcastUsersList(roomId);
+                    socket.emit('avatar-upload-success', users[socket.id]?.avatar || avatarUrl);
+                    console.debug(`User ${socket.id} uploaded avatar (resized): ${avatarUrl}`);
+                    return;
+                } catch (e) {
+                    console.warn('Avatar resize failed:', e.message);
+                    socket.emit('avatar-upload-error', 'Server failed to resize image.');
+                    return;
+                }
+            }
+
             const filename = `${socket.id}.${ext}`;
             const outPath = path.join(UPLOADS_DIR, filename);
             fs.writeFileSync(outPath, buf);
 
             // Attach avatar URL to user and room entry
-            const avatarUrl = `/uploads/${filename}`;
+            const avatarUrl = `/uploads/${filename}?t=${Date.now()}`;
             if (users[socket.id]) {
                 users[socket.id].avatar = avatarUrl;
                 const roomId = users[socket.id].room;
@@ -135,9 +200,11 @@ io.on('connection', (socket) => {
             // Broadcast updated users list for the room
             const roomId = users[socket.id]?.room;
             if (roomId) broadcastUsersList(roomId);
-            console.log(`User ${socket.id} uploaded avatar: ${avatarUrl}`);
+            socket.emit('avatar-upload-success', users[socket.id]?.avatar || avatarUrl);
+            console.debug(`User ${socket.id} uploaded avatar: ${avatarUrl}`);
         } catch (e) {
             console.warn('Failed to save avatar', e.message);
+            socket.emit('avatar-upload-error', 'Server error saving avatar');
         }
     });
 
@@ -158,7 +225,7 @@ io.on('connection', (socket) => {
                 ownerId: null,
                 ownerName: null
             };
-            console.log('Created room', roomId);
+            console.info('Created room', roomId);
             scheduleSaveRooms();
         }
 
@@ -184,7 +251,7 @@ io.on('connection', (socket) => {
         // Broadcast updated users list to the room
         broadcastUsersList(roomId);
 
-        console.log(`Socket ${socket.id} joined room ${roomId} as ${users[socket.id].username}`);
+        console.debug(`Socket ${socket.id} joined room ${roomId} as ${users[socket.id].username}`);
     });
 
     // Handle Username Change
@@ -193,7 +260,7 @@ io.on('connection', (socket) => {
             users[socket.id].username = username;
         }
         broadcastUsersList(users[socket.id].room);
-        console.log(`User ${socket.id} set username to: ${username}`);
+        console.debug(`User ${socket.id} set username to: ${username}`);
     });
 
     // Handle media state changes for audio/video join flow
@@ -250,7 +317,7 @@ io.on('connection', (socket) => {
             rooms[roomId].queue.push(item);
             io.to(roomId).emit('queue-update', rooms[roomId].queue);
             scheduleSaveRooms();
-            console.log(`Queue added in room ${roomId} by ${socket.id}: ${item.platform}:${item.id}`);
+            console.debug(`Queue added in room ${roomId} by ${socket.id}: ${item.platform}:${item.id}`);
         }
     });
 
@@ -262,7 +329,7 @@ io.on('connection', (socket) => {
             q.splice(index, 1);
             io.to(roomId).emit('queue-update', q);
             scheduleSaveRooms();
-            console.log(`Queue item removed in room ${roomId} by ${socket.id} at index ${index}`);
+            console.debug(`Queue item removed in room ${roomId} by ${socket.id} at index ${index}`);
         }
     });
 
@@ -275,7 +342,7 @@ io.on('connection', (socket) => {
             q.splice(to, 0, item);
             io.to(roomId).emit('queue-update', q);
             scheduleSaveRooms();
-            console.log(`Queue item moved in room ${roomId} by ${socket.id} from ${from} to ${to}`);
+            console.debug(`Queue item moved in room ${roomId} by ${socket.id} from ${from} to ${to}`);
         }
     });
 
@@ -289,7 +356,7 @@ io.on('connection', (socket) => {
             io.to(roomId).emit('queue-update', q);
             io.to(roomId).emit('video-change', rooms[roomId].currentVideo);
             scheduleSaveRooms();
-            console.log(`Advancing to next queue item in ${roomId}: ${rooms[roomId].currentVideo.platform}:${rooms[roomId].currentVideo.id}`);
+            console.debug(`Advancing to next queue item in ${roomId}: ${rooms[roomId].currentVideo.platform}:${rooms[roomId].currentVideo.id}`);
         }
     });
 
@@ -300,7 +367,7 @@ io.on('connection', (socket) => {
         rooms[roomId].playlist = newPlaylist;
         io.to(roomId).emit('playlist-update', rooms[roomId].playlist);
         scheduleSaveRooms();
-        console.log(`User ${socket.id} updated playlist in ${roomId}. Items: ${newPlaylist.length}`);
+        console.debug(`User ${socket.id} updated playlist in ${roomId}. Items: ${newPlaylist.length}`);
     });
 
     // Handle speaking status
@@ -316,7 +383,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
+        console.info('User disconnected:', socket.id);
         const roomId = users[socket.id]?.room;
         if (roomId && rooms[roomId]) {
             rooms[roomId].speakingUsers.delete(socket.id);
@@ -325,7 +392,7 @@ io.on('connection', (socket) => {
             if (Object.keys(rooms[roomId].users).length === 0) {
                 delete rooms[roomId];
                 scheduleSaveRooms();
-                console.log('Deleted empty room', roomId);
+                console.info('Deleted empty room', roomId);
             } else {
                 broadcastUsersList(roomId);
             }
@@ -347,7 +414,8 @@ function broadcastUsersList(roomId) {
         username: u.username,
         peerId: u.peerId,
         mediaState: u.mediaState || { audio: false, video: false },
-        owner: room.ownerId === socketId
+        owner: room.ownerId === socketId,
+        avatar: u.avatar || null
     }));
     io.to(roomId).emit('users-list', usersArray);
 }
@@ -355,5 +423,5 @@ function broadcastUsersList(roomId) {
 // Glitch uses process.env.PORT to assign dynamic ports
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Hangout running on port ${PORT}`);
+    console.info(`Hangout running on port ${PORT}`);
 });

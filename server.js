@@ -23,6 +23,12 @@ app.use(express.static('Public'));
 // Serve local client libraries from node_modules to avoid external CDN/blocking issues
 app.use('/js/peerjs', express.static(path.join(__dirname, 'node_modules', 'peerjs', 'dist')));
 app.use('/js/socket.io', express.static(path.join(__dirname, 'node_modules', 'socket.io', 'client-dist')));
+// Serve uploaded avatars
+const UPLOADS_DIR = path.join(__dirname, 'Public', 'uploads');
+app.use('/uploads', express.static(UPLOADS_DIR));
+
+// Ensure uploads directory exists
+try { fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) { /* ignore */ }
 
 app.get('/health', (req, res) => {
     res.status(200).send('ok');
@@ -100,6 +106,38 @@ io.on('connection', (socket) => {
             users[socket.id].peerId = peerId;
             broadcastUsersList(users[socket.id].room);
             console.log(`User ${socket.id} registered peer ID: ${peerId}`);
+        }
+    });
+
+    // Handle avatar upload (dataURL) via socket
+    socket.on('upload-avatar', (dataUrl) => {
+        try {
+            if (!dataUrl || typeof dataUrl !== 'string') return;
+            const matches = dataUrl.match(/^data:(image\/(png|jpeg|jpg));base64,(.+)$/);
+            if (!matches) return;
+            const ext = matches[2] === 'jpeg' ? 'jpg' : matches[2];
+            const b64 = matches[3];
+            const buf = Buffer.from(b64, 'base64');
+            const filename = `${socket.id}.${ext}`;
+            const outPath = path.join(UPLOADS_DIR, filename);
+            fs.writeFileSync(outPath, buf);
+
+            // Attach avatar URL to user and room entry
+            const avatarUrl = `/uploads/${filename}`;
+            if (users[socket.id]) {
+                users[socket.id].avatar = avatarUrl;
+                const roomId = users[socket.id].room;
+                if (roomId && rooms[roomId]) {
+                    if (!rooms[roomId].users) rooms[roomId].users = {};
+                    rooms[roomId].users[socket.id] = users[socket.id];
+                }
+            }
+            // Broadcast updated users list for the room
+            const roomId = users[socket.id]?.room;
+            if (roomId) broadcastUsersList(roomId);
+            console.log(`User ${socket.id} uploaded avatar: ${avatarUrl}`);
+        } catch (e) {
+            console.warn('Failed to save avatar', e.message);
         }
     });
 

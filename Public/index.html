@@ -165,8 +165,12 @@
             <div class="sidebar-content">
                         <div class="username-box">
                             <h3>Your Name</h3>
-                            <input type="text" id="username-input" placeholder="Enter your name...">
-                            <button onclick="setUsername()">Set Name</button>
+                            <div id="display-name" style="padding:8px;border-radius:4px;background:#111;color:#e0e0e0;font-weight:bold;">Anonymous</div>
+                            <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+                                <label style="font-size:0.85rem;color:#cfcfcf;">Avatar</label>
+                                <input id="avatar-input" type="file" accept="image/*" style="display:none;">
+                                <button onclick="document.getElementById('avatar-input').click()" style="padding:6px;border-radius:4px;background:#2196F3;border:none;color:white;">Upload</button>
+                            </div>
 
                             <div style="margin-top:10px;">
                                 <h3 style="margin:10px 0 6px 0;">Media Setup</h3>
@@ -232,14 +236,11 @@
 
         // --- 0. USERNAME MANAGEMENT ---
         function setUsername() {
-            const input = document.getElementById('username-input');
-            if(input.value.trim() !== '') {
-                myUsername = input.value.trim();
-                if (currentRoomId) socket.emit('set-username', myUsername);
-                input.value = '';
-                document.getElementById('overlay-username').value = '';
-                updateMediaStatus('Name set: ' + myUsername);
-            }
+            // Open the overlay so the user can change their display name
+            const ov = document.getElementById('login-overlay');
+            const ou = document.getElementById('overlay-username');
+            if (ou) ou.value = myUsername || '';
+            if (ov) ov.style.display = 'flex';
         }
 
         function generateRoomId(len = 6) {
@@ -266,6 +267,8 @@
             socket.emit('join-room', { roomId: id, username: name, owner: true });
             if (myPeerId) socket.emit('register-peer', myPeerId);
             document.getElementById('room-id').innerText = id;
+            // update displayed name in sidebar
+            const dn = document.getElementById('display-name'); if (dn) dn.innerText = myUsername;
             hideOverlay();
             updateMediaStatus('Created and joined room: ' + id);
         }
@@ -287,6 +290,7 @@
             if (myPeerId) socket.emit('register-peer', myPeerId);
             socket.emit('set-username', myUsername);
             document.getElementById('room-id').innerText = room;
+            const dn = document.getElementById('display-name'); if (dn) dn.innerText = myUsername;
             hideOverlay();
             updateMediaStatus('Joined room: ' + room);
         }
@@ -1038,7 +1042,7 @@
                 const userItem = document.createElement('div');
                 userItem.className = 'user-item';
                 const profileImg = document.createElement('img');
-                profileImg.src = generateProfilePicture(username);
+                profileImg.src = u.avatar ? u.avatar : generateProfilePicture(username);
                 profileImg.style = 'width: 24px; height: 24px; border-radius: 50%; margin-right: 8px; vertical-align: middle;';
                 userItem.appendChild(profileImg);
                 const isYou = peerId && peerId === currentUserId;
@@ -1064,7 +1068,7 @@
 
                     const img = document.createElement('img');
                     img.className = 'participant-avatar';
-                    img.src = generateProfilePicture(username);
+                    img.src = u.avatar ? u.avatar : generateProfilePicture(username);
                     img.alt = username;
                     tile.appendChild(img);
 
@@ -1142,6 +1146,23 @@
             t.innerText = msg;
             t.style.opacity = '1';
             setTimeout(() => { t.style.opacity = '0'; }, timeout);
+        }
+
+        // Avatar upload handling
+        const avatarInput = document.getElementById('avatar-input');
+        if (avatarInput) {
+            avatarInput.addEventListener('change', (e) => {
+                const f = e.target.files && e.target.files[0];
+                if (!f) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const dataUrl = reader.result;
+                    // Emit via socket to server which will save and broadcast
+                    socket.emit('upload-avatar', dataUrl);
+                    showToast('Uploading avatar...');
+                };
+                reader.readAsDataURL(f);
+            });
         }
     </script>
 </body>
